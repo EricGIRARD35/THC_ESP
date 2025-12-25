@@ -95,38 +95,6 @@ void handleTouchInput(uint16_t x, uint16_t y);
 void flashButton(int x1, int y1, int x2, int y2, uint16_t color);
 void  lv_scr_load();
 
-// // Variable statique pour limiter la fréquence de lecture tactile
-// static unsigned long lastTouchTime = 0;
-// const unsigned long touchInterval = 20; // 20 ms intervalle = 50 Hz
-
-// #define UP_BUTTON_X_MIN 350
-// #define UP_BUTTON_X_MAX 480
-// #define UP_BUTTON_Y_MIN 90
-// #define UP_BUTTON_Y_MAX 160
-
-// #define DOWN_BUTTON_X_MIN 350
-// #define DOWN_BUTTON_X_MAX 480
-// #define DOWN_BUTTON_Y_MIN 190
-// #define DOWN_BUTTON_Y_MAX 250
-
-// #define MENU_BUTTON_X_MIN 330
-// #define MENU_BUTTON_X_MAX 480
-// #define MENU_BUTTON_Y_MIN 280
-// #define MENU_BUTTON_Y_MAX 350
-
-// #define PRECED_BUTTON_X_MIN 0
-// #define PRECED_BUTTON_X_MAX 150
-// #define PRECED_BUTTON_Y_MIN 280
-// #define PRECED_BUTTON_Y_MAX 350
-
-// #define HOME_BUTTON_X_MIN 165
-// #define HOME_BUTTON_X_MAX 315
-// #define HOME_BUTTON_Y_MIN 280
-// #define HOME_BUTTON_Y_MAX 350
-
-// // --- Constantes de Zone Tactile --
-// #define TFT_DARKRED 0x4000 // Une valeur hexadécimale pour un rouge sombre
-
 // EEPROM addresses for parameters (Rien ne change ici)
 #define EEPROM_SETPOINT_ADDR 0
 #define EEPROM_CORRECTION_FACTOR_ADDR 4
@@ -217,8 +185,6 @@ float uncorrected_fast = 0.0;          // Uncorrected fast voltage
 float uncorrected_slow = 0.0;          // Uncorrected slow voltage
 bool anti_dive_active = false;         // Anti-dive state
 unsigned long anti_dive_start_time = 0;// Anti-dive start time
-const unsigned long ANTI_DIVE_DURATION_MIN = 50; // Min duration (ms) at high speed
-const unsigned long ANTI_DIVE_DURATION_MAX = 300; // Max duration (ms) at low speed
 
 // New for improved anti-dive: position history buffer
 const int POSITION_HISTORY_INTERVAL = 100; // ms between records
@@ -437,6 +403,9 @@ void btn_adjust_event_handler(lv_event_t *e) {
               
             case 3: // Kp
                 increment = 0.5;
+                    Serial.printf("\n🔍 === CASE 3 (Kp) ===\n");
+                Serial.printf("   Kp AVANT tout: %.10f\n", Kp);  // 10 décimales
+                Serial.printf("   &Kp = %p\n", &Kp);
                 Kp += direction * increment;
                 Kp = constrain(Kp, 0.0, 10.0);
                 myPID.SetTunings(Kp, Ki, Kd);
@@ -502,31 +471,22 @@ void btn_nav_event_handler(lv_event_t *e) {
         switch(target_screen_id) {
             case 0: 
                 target_screen = screen_monitoring;
-                Serial.printf("   → Cible: screen_monitoring (%p)\n", target_screen);
                 break;
             case 1: 
                 target_screen = screen_setpoint;
-                Serial.printf("   → Cible: screen_setpoint (%p)\n", target_screen);
                 break;
             case 2: 
                 target_screen = screen_correction;
-                Serial.printf("   → Cible: screen_correction (%p)\n", target_screen);
                 break;
             case 3: 
                 target_screen = screen_kp;
-                Serial.printf("   → Cible: screen_kp (%p)\n", target_screen);
                 break;
             case 4: 
                 target_screen = screen_ki;
-                Serial.printf("   → Cible: screen_ki (%p)\n", target_screen);
                 break;
             case 5: 
                 target_screen = screen_steps;
-                Serial.printf("   → Cible: screen_steps (%p)\n", target_screen);
                 break;
-            default:
-                Serial.printf("❌ ID écran invalide: %d\n", target_screen_id);
-                return;
         }
         
         // ✅ VÉRIFICATION CRITIQUE AVANT lv_scr_load_anim
@@ -559,34 +519,6 @@ void btn_nav_event_handler(lv_event_t *e) {
         Serial.println("✅ Animation lancée avec succès!");
     }
 }
-void diagnose_lvgl_touch() {
-    Serial.println("\n=== DIAGNOSTIC TACTILE LVGL ===");
-    
-    // Vérifier driver display
-    lv_disp_t *disp = lv_disp_get_default();
-    Serial.printf("Display driver: %s\n", disp ? "OK" : "ERREUR");
-    
-    // Vérifier driver tactile
-    lv_indev_t *indev = lv_indev_get_next(NULL);
-    if (indev) {
-        Serial.println("✅ Touch driver trouvé");
-        Serial.printf("   Type: %d (devrait être %d)\n", 
-                     indev->driver->type, LV_INDEV_TYPE_POINTER);
-        Serial.printf("   Callback: %p\n", indev->driver->read_cb);
-    } else {
-        Serial.println("❌ Touch driver NON trouvé!");
-    }
-    
-    // Test XPT2046
-    Serial.printf("XPT2046 initialised: %s\n", ts.begin() ? "OUI" : "NON");
-    Serial.printf("XPT2046 touched: %s\n", ts.touched() ? "OUI" : "NON");
-    
-    Serial.println("================================\n");
-}
-
-// ========================================
-// PARTIE 4 : CRÉATION DES ÉCRANS
-// ========================================
 
 void create_screen_monitoring() {
     // SÉCURITÉ : Si l'écran existe déjà, on ne le recrée pas
@@ -621,7 +553,7 @@ void create_screen_monitoring() {
     
     label_voltage_fast = lv_label_create(panel);
     lv_label_set_text(label_voltage_fast, "0.0 V");
-    lv_obj_set_style_text_color(label_voltage_fast, lv_color_hex(0xFF0505), 0);
+    lv_obj_set_style_text_color(label_voltage_fast, lv_color_hex(0xFF0000), 0);
     lv_obj_align(label_voltage_fast, LV_ALIGN_TOP_RIGHT, -10, 10);
 
     // Voltage Slow
@@ -631,7 +563,7 @@ void create_screen_monitoring() {
     
     label_voltage_slow = lv_label_create(panel);
     lv_label_set_text(label_voltage_slow, "0.0 V");
-    lv_obj_set_style_text_color(label_voltage_slow, lv_color_hex(0xFF0505), 0);
+    lv_obj_set_style_text_color(label_voltage_slow, lv_color_hex(0xFF0000), 0);
     lv_obj_align(label_voltage_slow, LV_ALIGN_TOP_RIGHT, -10, 35);
 
     // Setpoint (Vert)
@@ -641,7 +573,7 @@ void create_screen_monitoring() {
     
     label_setpoint = lv_label_create(panel);
     lv_label_set_text(label_setpoint, "110.0 V");
-    lv_obj_set_style_text_color(label_setpoint, lv_color_hex(0x00FF00), 0);
+    lv_obj_set_style_text_color(label_setpoint, lv_color_hex(0xFF0000), 0);
     lv_obj_align(label_setpoint, LV_ALIGN_TOP_RIGHT, -10, 60);
 
     // Position
@@ -651,7 +583,7 @@ void create_screen_monitoring() {
     
     label_position = lv_label_create(panel);
     lv_label_set_text(label_position, "0 steps");
-    lv_obj_set_style_text_color(label_position, lv_color_hex(0x00FF00), 0);
+    lv_obj_set_style_text_color(label_position, lv_color_hex(0xFF0000), 0);
     lv_obj_align(label_position, LV_ALIGN_TOP_RIGHT, -10, 85);
 
     // === STATUTS (avec LED colorées) ===
@@ -723,19 +655,19 @@ void create_screen_setpoint() {
     // Affichage valeur
     label = lv_label_create(screen_setpoint);
     lv_label_set_text(label, "Consigne (V):");
-    lv_obj_align(label, LV_ALIGN_CENTER, 0, -50);
+    lv_obj_align(label, LV_ALIGN_CENTER, -60, -50);
     lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
     
     label_setpoint_val = lv_label_create(screen_setpoint);
     lv_label_set_text(label_setpoint_val, "110.0");
-    lv_obj_align(label_setpoint_val, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(label_setpoint_val, LV_ALIGN_CENTER, -60, 0);
     lv_obj_set_style_text_font(label_setpoint_val, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(label_setpoint_val, lv_color_hex(0x00FFFF), 0);
+    lv_obj_set_style_text_color(label_setpoint_val, lv_color_hex(0xFF2F2F), 0);
 
     // Bouton +
     lv_obj_t *btn_up = lv_btn_create(screen_setpoint);
-    lv_obj_set_size(btn_up, 120, 70);
-    lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -20, -70);
+    lv_obj_set_size(btn_up, 120, 60);
+    lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -20, -40);
     lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
     lv_obj_add_event_cb(btn_up, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)1);
     
@@ -746,8 +678,8 @@ void create_screen_setpoint() {
 
     // Bouton -
     lv_obj_t *btn_down = lv_btn_create(screen_setpoint);
-    lv_obj_set_size(btn_down, 120, 70);
-    lv_obj_align(btn_down, LV_ALIGN_RIGHT_MID, -20, 70);
+    lv_obj_set_size(btn_down, 120, 60);
+    lv_obj_align(btn_down, LV_ALIGN_RIGHT_MID, -20, 40);
     lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
     lv_obj_add_event_cb(btn_down, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
     
@@ -784,7 +716,7 @@ void create_screen_setpoint() {
     lv_label_set_text(label, "Suivant " LV_SYMBOL_RIGHT);
     lv_obj_center(label);
 }
-// ✅ CRÉATION DES ÉCRANS MANQUANTS
+
 void create_screen_correction() {
     screen_correction = lv_obj_create(NULL);
     
@@ -1169,7 +1101,7 @@ void lvgl_setup() {
     Serial.println("LVGL initialisé avec succès");
     // ✅ DIAGNOSTIC FINAL
     vTaskDelay(pdMS_TO_TICKS(500));
-    diagnose_lvgl_touch();
+    //diagnose_lvgl_touch();
 }
 
 
@@ -1240,21 +1172,48 @@ void update_lvgl_labels_safe(DisplayData* data) {
         lv_obj_set_style_text_color(label_arc_state, lv_color_hex(0xFF0000), 0);
     }
     lv_obj_invalidate(label_arc_state);
+
+
+}
+
+void update_all_screen_values() {
+    char buf[32];
     
-    // === SETPOINT VAL ===
-    if (label_setpoint_val != NULL) {
-        snprintf(buf, sizeof(buf), "%.1f", data->setpoint);
-        lv_label_set_text(label_setpoint_val, buf);
-        lv_obj_invalidate(label_setpoint_val);
+    // Écran Monitoring
+    if (label_setpoint != NULL) {
+        snprintf(buf, sizeof(buf), "%.1f V", Setpoint);
+        lv_label_set_text(label_setpoint, buf);
     }
     
-    // Debug
-    // static int update_count = 0;
-    // update_count++;
-    // if (update_count % 10 == 0) {
-    //     Serial.printf("🔄 Labels mis à jour #%d: Fast=%.1f, Slow=%.1f\n", 
-    //                  update_count, data->fast_voltage, data->slow_voltage);
-    // }
+    // Écran Setpoint
+    if (label_setpoint_val != NULL) {
+        snprintf(buf, sizeof(buf), "%.1f", Setpoint);
+        lv_label_set_text(label_setpoint_val, buf);
+    }
+    
+    // Écran Correction
+    if (label_correction_val != NULL) {
+        snprintf(buf, sizeof(buf), "%.2f", voltage_correction_factor);
+        lv_label_set_text(label_correction_val, buf);
+    }
+    
+    // Écran Kp
+    if (label_kp_val != NULL) {
+        snprintf(buf, sizeof(buf), "%.1f", Kp);
+        lv_label_set_text(label_kp_val, buf);
+    }
+    
+    // Écran Ki
+    if (label_ki_val != NULL) {
+        snprintf(buf, sizeof(buf), "%.1f", Ki);
+        lv_label_set_text(label_ki_val, buf);
+    }
+    
+    // Écran Steps
+    if (label_steps_val != NULL) {
+        snprintf(buf, sizeof(buf), "%.0f", STEPS_PER_MM_Z);
+        lv_label_set_text(label_steps_val, buf);
+    }
 }
 
 
@@ -1311,12 +1270,16 @@ void setup() {
   // On réserve 512 octets de mémoire flash pour émuler l'EEPROM
   Serial.begin(115200);
   delay(1000);
-  diagnose_lvgl_touch();
+//   
+// diagnose_lvgl_touch();
   if (!EEPROM.begin(512)) {
     Serial.println("Failed to initialise EEPROM");
+
     delay(1000);
     ESP.restart();
   }
+  // Initialize EEPROM with default values if not already initialized
+  initializeEEPROM();
 
   pinMode(STEPPER_STEP_PIN, OUTPUT);
   pinMode(STEPPER_DIR_PIN, OUTPUT);
@@ -1370,25 +1333,23 @@ void setup() {
     // Initialisation LVGL (APRÈS TFT)
     lvgl_setup();
 
+    update_all_screen_values();
+
   for (int i = 0; i < speed_filter_size; i++) {
     speed_readings[i] = 0.0;
   }
 
   myPID.SetOutputLimits(-100, 100); 
   myPID.SetMode(AUTOMATIC);
-  Ki = DEFAULT_KI;
-  Kd = DEFAULT_KD;
-  Kp = DEFAULT_KP;
   myPID.SetTunings(Kp, Ki, Kd);
   myPID.SetSampleTime(1); 
-  // Initialize EEPROM with default values if not already initialized
-  initializeEEPROM();
+  
 
   // Validation des valeurs (inchangé)
   if (isnan(Setpoint) || Setpoint < 80 || Setpoint > 200) Setpoint = DEFAULT_SETPOINT;
   if (isnan(voltage_correction_factor) || voltage_correction_factor < 0.5 || voltage_correction_factor > 2.0) voltage_correction_factor = DEFAULT_CORRECTION_FACTOR;
   if (isnan(STEPS_PER_MM_Z) || STEPS_PER_MM_Z < 200 || STEPS_PER_MM_Z > 2000) STEPS_PER_MM_Z = DEFAULT_STEP_PER_MM;
-  if (isnan(Kp) || Kp < 0.0 || Kp > 10) Kp = DEFAULT_KP;
+  //if (isnan(Kp) || Kp < 0.0 || Kp > 10) Kp = DEFAULT_KP;
   if (isnan(Ki) || Ki < 0.0 || Ki > 10) Ki = DEFAULT_KI;
   if (isnan(Kd) || Kd < 0.0 || Kd > 0.1) Kd = DEFAULT_KD;
   myPID.SetTunings(Kp, Ki, Kd);
@@ -1502,88 +1463,7 @@ void initializeEEPROM() {
     EEPROM.get(EEPROM_STEPS_MM_Z_ADDR, STEPS_PER_MM_Z);
     Serial.print("Loaded steps par mm: "); Serial.println(STEPS_PER_MM_Z, 4);
 }
-// void checkButtonPress(int x, int y) {
-//     static unsigned long lastButtonPress = 0;
-    
-//     // Anti-rebond : ignorer les touches trop rapprochées
-//     if (millis() - lastButtonPress < 200) {
-//         return;
-//     }
-    
-//     // === ÉCRAN 0 : MONITORING ===
-//     if (currentScreen == 0) {
-//         // Bouton "Suivant" en bas à droite (150x50)
-//         // Position approximative : x: 320-470, y: 260-310
-//         if (x >= 320 && x <= 470 && y >= 260 && y <= 310) {
-//             Serial.println("✅ MONITORING -> Bouton SUIVANT pressé!");
-//             lv_scr_load_anim(screen_setpoint, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
-//             currentScreen = 1;
-//             lastButtonPress = millis();
-//             return;
-//         }
-//     }
-    
-//     // === ÉCRAN 1 : SETPOINT ===
-//     else if (currentScreen == 1) {
-//         // Bouton + (droite, haut) - 120x70
-//         // Position approximative : x: 350-470, y: 80-150
-//         if (x >= 350 && x <= 470 && y >= 80 && y <= 150) {
-//             Serial.println("✅ SETPOINT -> Bouton + pressé!");
-//             adjustCurrentSetting(1);
-//             lastButtonPress = millis();
-//             return;
-//         }
-        
-//         // Bouton - (droite, bas) - 120x70
-//         // Position approximative : x: 350-470, y: 170-240
-//         if (x >= 350 && x <= 470 && y >= 170 && y <= 240) {
-//             Serial.println("✅ SETPOINT -> Bouton - pressé!");
-//             adjustCurrentSetting(-1);
-//             lastButtonPress = millis();
-//             return;
-//         }
-        
-//         // Bouton "Retour" (bas gauche) - 140x50
-//         // Position approximative : x: 10-150, y: 260-310
-//         if (x >= 10 && x <= 150 && y >= 260 && y <= 310) {
-//           EEPROM.commit();
-//             Serial.println("✅ SETPOINT -> Bouton RETOUR pressé!");
-//             lv_scr_load_anim(screen_monitoring, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
-//             currentScreen = 0;
-//             lastButtonPress = millis();
-//             return;
-//         }
-        
-//         // Bouton "Home" (bas centre) - 140x50
-//         // Position approximative : x: 165-305, y: 260-310
-//         if (x >= 165 && x <= 305 && y >= 260 && y <= 310) {
-//           EEPROM.commit();
-//             Serial.println("✅ SETPOINT -> Bouton HOME pressé!");
-//             lv_scr_load_anim(screen_monitoring, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
-//             currentScreen = 0;
-//             lastButtonPress = millis();
-//             return;
-//         }
-        
-//         // Bouton "Suivant" (bas droite) - 140x50
-//         // Position approximative : x: 320-470, y: 260-310
-//         if (x >= 320 && x <= 470 && y >= 260 && y <= 310) {
-//           EEPROM.commit();
-//             Serial.println("✅ SETPOINT -> Bouton SUIVANT pressé!");
-//             // Charger le prochain écran (correction, kp, etc.)
-//             if (screen_correction != NULL) {
-//                 lv_scr_load_anim(screen_correction, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
-//                 currentScreen = 2;
-//             }
-//             lastButtonPress = millis();
-//             return;
-//         }
-//     }
-    
-//     // Ajouter d'autres écrans si nécessaire...
-    
-//     Serial.printf("   Touch hors zone bouton: (%d, %d)\n", x, y);
-// }
+
  void loop() {
     // ========================================
     // VARIABLES STATIQUES (déclarées UNE SEULE FOIS)
@@ -1617,90 +1497,7 @@ void initializeEEPROM() {
     unsigned long loopStartTime = micros();
     unsigned long currentTime = millis();
     
-    // // ========================================
-    // // 1. GESTION TACTILE (avec calibration optionnelle)
-    // // ========================================
-    // if (millis() - lastTouchCheck >= (CALIBRATION_MODE ? 100 : 20)) {
-    //     if (xSemaphoreTake(spiMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-    //         bool is_touched = ts.touched();
-            
-    //         if (is_touched && !was_touched) {
-    //             // Nouveau touch détecté
-    //             TS_Point p = ts.getPoint();
-                
-    //             if (CALIBRATION_MODE) {
-    //                 // ====== MODE CALIBRATION ======
-    //                 Serial.println("\n=== CALIBRATION MODE ===");
-    //                 Serial.printf("Touch #%d - RAW: X=%d, Y=%d\n", touch_count + 1, p.x, p.y);
-    //                 Serial.println("Touchez dans cet ordre:");
-    //                 Serial.println("1. Coin HAUT-GAUCHE");
-    //                 Serial.println("2. Coin HAUT-DROITE");
-    //                 Serial.println("3. Coin BAS-GAUCHE");
-    //                 Serial.println("4. Coin BAS-DROITE");
-                    
-    //                 if (touch_count < 4) {
-    //                     corners[touch_count][0] = p.x;
-    //                     corners[touch_count][1] = p.y;
-    //                     touch_count++;
-    //                 }
-                    
-    //                 // Après 4 touches, calculer les min/max
-    //                 if (touch_count == 4) {
-    //                     int x_min = min(min(corners[0][0], corners[2][0]), 4096);
-    //                     int x_max = max(max(corners[1][0], corners[3][0]), 0);
-    //                     int y_min = min(min(corners[0][1], corners[1][1]), 4096);
-    //                     int y_max = max(max(corners[2][1], corners[3][1]), 0);
-                        
-    //                     Serial.println("\n========== RÉSULTATS CALIBRATION ==========");
-    //                     Serial.printf("X_MIN = %d\n", x_min);
-    //                     Serial.printf("X_MAX = %d\n", x_max);
-    //                     Serial.printf("Y_MIN = %d\n", y_min);
-    //                     Serial.printf("Y_MAX = %d\n", y_max);
-    //                     Serial.println("\nModifiez votre code avec ces valeurs:");
-    //                     Serial.printf("int x = map(p.x, %d, %d, 0, 480);\n", x_min, x_max);
-    //                     Serial.printf("int y = map(p.y, %d, %d, 0, 320);\n", y_min, y_max);
-    //                     Serial.println("\nPuis mettez CALIBRATION_MODE = false;");
-    //                     Serial.println("==========================================\n");
-                        
-    //                     // Reset pour recommencer
-    //                     touch_count = 0;
-    //                 }
-                    
-    //             } else {
-    //                 // ====== MODE NORMAL ======
-    //                 int x = map(p.x, 3900, 360, 0, SCREEN_WIDTH);  // ⚠️ À remplacer après calibration
-    //                 int y = map(p.y, 3800, 340, 0, SCREEN_HEIGHT); // ⚠️ À remplacer après calibration
-                    
-    //                 // Détecter mouvement significatif
-    //                 if (!was_touched || abs(x - last_x) > 10 || abs(y - last_y) > 10) {
-    //                     Serial.printf("🎯 TOUCH: RAW(%d,%d) -> MAP(%d,%d)\n", p.x, p.y, x, y);
-                        
-    //                     // Gestion des boutons
-    //                     checkButtonPress(x, y);
-                        
-    //                     last_x = x;
-    //                     last_y = y;
-    //                 }
-    //             }
-                
-    //             was_touched = true;
-                
-    //         } else if (!is_touched && was_touched) {
-    //             // Release
-    //             if (!CALIBRATION_MODE) {
-    //                 Serial.println("🎯 RELEASE");
-    //             }
-    //             was_touched = false;
-    //         }
-            
-    //         xSemaphoreGive(spiMutex);
-    //     }
-    //     lastTouchCheck = millis();
-    // }
-    
-    // ========================================
-    // 2. RESTE DU CODE (seulement si pas en calibration)
-    // ========================================
+   
     if (!CALIBRATION_MODE) {
         
         // Exécution moteur
@@ -1779,7 +1576,9 @@ void initializeEEPROM() {
             Serial.print(" V | Slow voltage: ");
             Serial.print(slow_voltage);
             Serial.print(" V | Anti-dive: ");
-            Serial.println(anti_dive_active ? "Active" : "Inactive");
+            Serial.print(anti_dive_active ? "Active" : "Inactive");
+            Serial.print(" | Kp: ");
+            Serial.println(Kp);
             
             if (!thc_active) {
                 Serial.print("Reason THC inactive: ");
@@ -1817,55 +1616,6 @@ void initializeEEPROM() {
         }
     }
 }
-// void adjustCurrentSetting(int direction) {
-//     float increment = 0.0;
-    
-//     switch(currentScreen) {
-//         case 0: // Monitoring - read only
-//             Serial.println("Monitoring screen - no adjustment");
-//             break;
-            
-//         case 1: // Setpoint
-//             increment = 1.0;
-//             Setpoint += direction * increment;
-//             Setpoint = constrain(Setpoint, 80.0, 200.0);
-//             EEPROM.put(EEPROM_SETPOINT_ADDR, (float)Setpoint);
-            
-//             break;
-            
-//         case 2: // Voltage correction factor
-//             increment = 0.01;
-//             temp_voltage_correction_factor += direction * increment;
-//             temp_voltage_correction_factor = constrain(temp_voltage_correction_factor, 0.5, 2.0);
-//             break;
-          
-//         case 3: // Kp
-//             increment = 0.5;
-//             Kp += direction * increment;
-//             Kp = constrain(Kp, 0.0, 10.0);
-//             myPID.SetTunings(Kp, Ki, Kd);
-//             EEPROM.put(EEPROM_KP_ADDR,(float)Kp);
-            
-//             break;
-            
-//         case 4: // Ki
-//             increment = 0.1;
-//             Ki += direction * increment;
-//             Ki = constrain(Ki, 0.0, 10.0);
-//             myPID.SetTunings(Kp, Ki, Kd);
-//             EEPROM.put(EEPROM_KI_ADDR, (float)Ki);
-            
-//             break;
-
-//             case 5: // Steps pas mm
-//             increment = 1;
-//             STEPS_PER_MM_Z += direction * increment;
-//             STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 200.0, 2000.0);
-//             EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, (float)STEPS_PER_MM_Z);
-//             break;
-//     }
-//     // updateDisplay();
-// }
 
 
 void navigateScreen(int direction) {
@@ -1878,13 +1628,9 @@ void navigateScreen(int direction) {
     if (currentScreen < 0) {
         currentScreen = NB_SCREENS;
     }
-    // updateDisplay();
+    
 }
-// void flashButton(int x1, int y1, int x2, int y2, uint16_t color) {
-//     // tft.fillRect(x1, y1, x2 - x1, y2 - y1, color);
-//     // delay(50); 
-//     // // Idéalement, redessiner le bouton d'origine ici ou forcer un updateTFT()
-// }
+
 
 void readAndFilterVoltage() {
 
@@ -1899,7 +1645,7 @@ void readAndFilterVoltage() {
     if (start_time == 0) start_time = millis();
     if (millis() - start_time >= 1000) warmed_up = true;
 
-    // === LECTURE ADS1115 PROTÉGÉE ===
+    // === LECTURE ADS1115  ===
     if (millis() - lastAdcRead >= 50) {
         // Protection I²C
         if (xSemaphoreTake(i2cMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -1976,7 +1722,7 @@ void readAndFilterVoltage() {
 
     // Activation désactivation de l'Anti_Div
     if (warmed_up && 
-        fast_voltage > slow_voltage + DROP_THRESHOLD && 
+        abs(fast_voltage - slow_voltage)> DROP_THRESHOLD && 
         !anti_dive_active && thc_active) {
         
         anti_dive_active = true;
@@ -1990,7 +1736,7 @@ void readAndFilterVoltage() {
         Serial.print(slow_voltage, 1);
         Serial.print("V | Saved: ");
         Serial.println(voltage_at_activation, 1);
-    } else if (anti_dive_active&&(fast_voltage-slow_voltage) < RETURN_THRESHOLD) {
+    } else if (anti_dive_active&&abs(Setpoint-slow_voltage) < RETURN_THRESHOLD) {
           anti_dive_active=false;
         }
   }
