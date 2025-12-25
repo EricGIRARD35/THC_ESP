@@ -91,7 +91,7 @@ const unsigned long touchInterval = 50; // Lire le tactile toutes les 50 ms
 
 // --- Prototypes des fonctions d'interface tactile ---
 void handleTouchInput(uint16_t x, uint16_t y);
-void adjustCurrentSetting(int direction);
+// void adjustCurrentSetting(int direction);
 void flashButton(int x1, int y1, int x2, int y2, uint16_t color);
 void  lv_scr_load();
 
@@ -321,37 +321,55 @@ void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color
     uint32_t w = (area->x2 - area->x1 + 1);
     uint32_t h = (area->y2 - area->y1 + 1);
 
-    // Protection SPI
-    // if (xSemaphoreTake(spiMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+    // Protection SPI avec timeout plus long pour display
+    if (xSemaphoreTake(spiMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
         tft.startWrite();
         tft.setAddrWindow(area->x1, area->y1, w, h);
         tft.pushColors((uint16_t *)&color_p->full, w * h, true);
         tft.endWrite();
-        // xSemaphoreGive(spiMutex);
-    // }
+        xSemaphoreGive(spiMutex);
+    } else {
+        Serial.println("⚠️ SPI timeout dans flush!");
+    }
 
     lv_disp_flush_ready(disp);
 }
 
 // Fonction pour lire le tactile
 void lv_touchpad_read(lv_indev_drv_t * indev, lv_indev_data_t * data) {
+    // Protection SPI
+    if (xSemaphoreTake(spiMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+        
+        if (ts.touched()) {
+            TS_Point p = ts.getPoint();
 
-    if (ts.touched()) {
-        TS_Point p = ts.getPoint();
+            data->state = LV_INDEV_STATE_PR;
 
-        data->state = LV_INDEV_STATE_PR;
+            // ✅ MAPPING CORRIGÉ (utiliser vos valeurs de calibration)
+            // Remplacez 360, 3900, 340, 3800 par vos valeurs réelles
+            data->point.x = map(p.x, 3900, 360, 0, SCREEN_WIDTH);
+            data->point.y = map(p.y, 3800, 340, 0, SCREEN_HEIGHT);
 
-        // Mapping SIMPLE (rapide)
-        data->point.x = (int32_t)((p.x - 360) * SCREEN_WIDTH  / (3900 - 360));
-        data->point.y = (int32_t)((p.y - 340) * SCREEN_HEIGHT / (3800 - 340));
+            // Clamp sécurité
+            data->point.x = constrain(data->point.x, 0, SCREEN_WIDTH - 1);
+            data->point.y = constrain(data->point.y, 0, SCREEN_HEIGHT - 1);
 
-        // Clamp sécurité
-        if (data->point.x < 0) data->point.x = 0;
-        if (data->point.x > SCREEN_WIDTH) data->point.x = SCREEN_WIDTH;
-        if (data->point.y < 0) data->point.y = 0;
-        if (data->point.y > SCREEN_HEIGHT) data->point.y = SCREEN_HEIGHT;
+            // ✅ DEBUG IMPORTANT : Afficher les touches
+            static unsigned long lastDebug = 0;
+            if (millis() - lastDebug > 500) {
+                Serial.printf("📱 Touch: RAW(%d,%d) -> Screen(%d,%d)\n", 
+                             p.x, p.y, data->point.x, data->point.y);
+                lastDebug = millis();
+            }
 
+        } else {
+            data->state = LV_INDEV_STATE_REL;
+        }
+        
+        xSemaphoreGive(spiMutex);
+        
     } else {
+        // Si timeout SPI, relâcher le touch
         data->state = LV_INDEV_STATE_REL;
     }
 }
@@ -369,21 +387,201 @@ void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
 // Callback pour boutons +/-
 void btn_adjust_event_handler(lv_event_t *e) {
     lv_event_code_t code = lv_event_get_code(e);
+    
+    // Feedback visuel sur PRESSED
+    if (code == LV_EVENT_PRESSED) {
+        lv_obj_t *btn = lv_event_get_target(e);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_70, LV_STATE_PRESSED);
+        Serial.println("🔘 Bouton pressé!");
+    }
+    
     if (code == LV_EVENT_CLICKED) {
-        int direction = (int)lv_event_get_user_data(e);
-        adjustCurrentSetting(direction);
+        int direction = (int)(intptr_t)lv_event_get_user_data(e);
+        
+        Serial.printf("✅ Ajustement: %+d sur écran %d\n", direction, currentScreen);
+        
+        // ===== LOGIQUE D'AJUSTEMENT INTÉGRÉE =====
+        float increment = 0.0;
+        char buf[32];
+        
+        switch(currentScreen) {
+            case 0: // Monitoring - lecture seule
+                Serial.println("Monitoring screen - no adjustment");
+                break;
+                
+            case 1: // Setpoint
+                increment = 1.0;
+                Setpoint += direction * increment;
+                Setpoint = constrain(Setpoint, 80.0, 200.0);
+                EEPROM.put(EEPROM_SETPOINT_ADDR, (float)Setpoint);
+                
+                if (label_setpoint_val != NULL) {
+                    snprintf(buf, sizeof(buf), "%.1f", Setpoint);
+                    lv_label_set_text(label_setpoint_val, buf);
+                }
+                Serial.printf("Setpoint: %.1f V\n", Setpoint);
+                break;
+                
+            case 2: // Voltage correction factor
+                increment = 0.01;
+                voltage_correction_factor += direction * increment;
+                voltage_correction_factor = constrain(voltage_correction_factor, 0.5, 2.0);
+                EEPROM.put(EEPROM_CORRECTION_FACTOR_ADDR, (float)voltage_correction_factor);
+                
+                if (label_correction_val != NULL) {
+                    snprintf(buf, sizeof(buf), "%.2f", voltage_correction_factor);
+                    lv_label_set_text(label_correction_val, buf);
+                }
+                Serial.printf("Correction: %.2f\n", voltage_correction_factor);
+                break;
+              
+            case 3: // Kp
+                increment = 0.5;
+                Kp += direction * increment;
+                Kp = constrain(Kp, 0.0, 10.0);
+                myPID.SetTunings(Kp, Ki, Kd);
+                EEPROM.put(EEPROM_KP_ADDR, (float)Kp);
+                
+                if (label_kp_val != NULL) {
+                    snprintf(buf, sizeof(buf), "%.1f", Kp);
+                    lv_label_set_text(label_kp_val, buf);
+                }
+                Serial.printf("Kp: %.1f\n", Kp);
+                break;
+                
+            case 4: // Ki
+                increment = 0.1;
+                Ki += direction * increment;
+                Ki = constrain(Ki, 0.0, 10.0);
+                myPID.SetTunings(Kp, Ki, Kd);
+                EEPROM.put(EEPROM_KI_ADDR, (float)Ki);
+                
+                if (label_ki_val != NULL) {
+                    snprintf(buf, sizeof(buf), "%.1f", Ki);
+                    lv_label_set_text(label_ki_val, buf);
+                }
+                Serial.printf("Ki: %.1f\n", Ki);
+                break;
+
+            case 5: // Steps per mm
+                increment = 10.0;
+                STEPS_PER_MM_Z += direction * increment;
+                STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 200.0, 2000.0);
+                EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, (float)STEPS_PER_MM_Z);
+                
+                if (label_steps_val != NULL) {
+                    snprintf(buf, sizeof(buf), "%.0f", STEPS_PER_MM_Z);
+                    lv_label_set_text(label_steps_val, buf);
+                }
+                Serial.printf("Steps/mm: %.0f\n", STEPS_PER_MM_Z);
+                break;
+        }
     }
 }
 
-// Callback pour navigation écrans
 void btn_nav_event_handler(lv_event_t *e) {
-
-  Serial.println(Setpoint);
     lv_event_code_t code = lv_event_get_code(e);
+    
     if (code == LV_EVENT_CLICKED) {
-        lv_obj_t *target_screen = (lv_obj_t *)lv_event_get_user_data(e);
+        // Récupérer l'ID
+        int target_screen_id = (int)(intptr_t)lv_event_get_user_data(e);
+        
+        Serial.printf("🔍 Navigation demandée vers ID: %d\n", target_screen_id);
+        
+        // ✅ LOGS DE DEBUG CRITIQUES
+        Serial.printf("   screen_monitoring = %p\n", screen_monitoring);
+        Serial.printf("   screen_setpoint = %p\n", screen_setpoint);
+        Serial.printf("   screen_correction = %p\n", screen_correction);
+        Serial.printf("   screen_kp = %p\n", screen_kp);
+        Serial.printf("   screen_ki = %p\n", screen_ki);
+        Serial.printf("   screen_steps = %p\n", screen_steps);
+        
+        lv_obj_t *target_screen = NULL;
+        
+        // Convertir l'ID en pointeur
+        switch(target_screen_id) {
+            case 0: 
+                target_screen = screen_monitoring;
+                Serial.printf("   → Cible: screen_monitoring (%p)\n", target_screen);
+                break;
+            case 1: 
+                target_screen = screen_setpoint;
+                Serial.printf("   → Cible: screen_setpoint (%p)\n", target_screen);
+                break;
+            case 2: 
+                target_screen = screen_correction;
+                Serial.printf("   → Cible: screen_correction (%p)\n", target_screen);
+                break;
+            case 3: 
+                target_screen = screen_kp;
+                Serial.printf("   → Cible: screen_kp (%p)\n", target_screen);
+                break;
+            case 4: 
+                target_screen = screen_ki;
+                Serial.printf("   → Cible: screen_ki (%p)\n", target_screen);
+                break;
+            case 5: 
+                target_screen = screen_steps;
+                Serial.printf("   → Cible: screen_steps (%p)\n", target_screen);
+                break;
+            default:
+                Serial.printf("❌ ID écran invalide: %d\n", target_screen_id);
+                return;
+        }
+        
+        // ✅ VÉRIFICATION CRITIQUE AVANT lv_scr_load_anim
+        if (target_screen == NULL) {
+            Serial.printf("❌ ERREUR FATALE: target_screen est NULL pour ID %d!\n", target_screen_id);
+            Serial.println("   Les écrans ont été corrompus ou non créés correctement.");
+            return;
+        }
+        
+        // ✅ VÉRIFIER QUE L'OBJET LVGL EST VALIDE
+        if (!lv_obj_is_valid(target_screen)) {
+            Serial.printf("❌ ERREUR: target_screen %p n'est PAS un objet LVGL valide!\n", target_screen);
+            return;
+        }
+        
+        Serial.println("   ✅ Tous les checks OK, lancement animation...");
+        
+        // Sauvegarder EEPROM
+        EEPROM.commit();
+        Serial.println("💾 EEPROM sauvegardée");
+        
+        // Mise à jour currentScreen
+        currentScreen = target_screen_id;
+        
+        Serial.printf("🔄 Navigation vers écran %d (%p)\n", target_screen_id, target_screen);
+        
+        // ✅ APPEL SÉCURISÉ
         lv_scr_load_anim(target_screen, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
+        
+        Serial.println("✅ Animation lancée avec succès!");
     }
+}
+void diagnose_lvgl_touch() {
+    Serial.println("\n=== DIAGNOSTIC TACTILE LVGL ===");
+    
+    // Vérifier driver display
+    lv_disp_t *disp = lv_disp_get_default();
+    Serial.printf("Display driver: %s\n", disp ? "OK" : "ERREUR");
+    
+    // Vérifier driver tactile
+    lv_indev_t *indev = lv_indev_get_next(NULL);
+    if (indev) {
+        Serial.println("✅ Touch driver trouvé");
+        Serial.printf("   Type: %d (devrait être %d)\n", 
+                     indev->driver->type, LV_INDEV_TYPE_POINTER);
+        Serial.printf("   Callback: %p\n", indev->driver->read_cb);
+    } else {
+        Serial.println("❌ Touch driver NON trouvé!");
+    }
+    
+    // Test XPT2046
+    Serial.printf("XPT2046 initialised: %s\n", ts.begin() ? "OUI" : "NON");
+    Serial.printf("XPT2046 touched: %s\n", ts.touched() ? "OUI" : "NON");
+    
+    Serial.println("================================\n");
 }
 
 // ========================================
@@ -501,7 +699,7 @@ void create_screen_monitoring() {
     lv_obj_t *btn_next = lv_btn_create(screen_monitoring);
     lv_obj_set_size(btn_next, 150, 50);
     lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, screen_setpoint);
+    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)1);
     
     label = lv_label_create(btn_next);
     lv_label_set_text(label, LV_SYMBOL_RIGHT " Suivant");
@@ -539,7 +737,7 @@ void create_screen_setpoint() {
     lv_obj_set_size(btn_up, 120, 70);
     lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -20, -70);
     lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
-    lv_obj_add_event_cb(btn_up, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)1);
+    lv_obj_add_event_cb(btn_up, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)1);
     
     label = lv_label_create(btn_up);
     lv_label_set_text(label, LV_SYMBOL_PLUS);
@@ -551,7 +749,7 @@ void create_screen_setpoint() {
     lv_obj_set_size(btn_down, 120, 70);
     lv_obj_align(btn_down, LV_ALIGN_RIGHT_MID, -20, 70);
     lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
-    lv_obj_add_event_cb(btn_down, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)-1);
+    lv_obj_add_event_cb(btn_down, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
     
     label = lv_label_create(btn_down);
     lv_label_set_text(label, LV_SYMBOL_MINUS);
@@ -562,7 +760,7 @@ void create_screen_setpoint() {
     lv_obj_t *btn_prev = lv_btn_create(screen_setpoint);
     lv_obj_set_size(btn_prev, 140, 50);
     lv_obj_align(btn_prev, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-    lv_obj_add_event_cb(btn_prev, btn_nav_event_handler, LV_EVENT_CLICKED, screen_monitoring);
+    lv_obj_add_event_cb(btn_prev, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
     
     label = lv_label_create(btn_prev);
     lv_label_set_text(label, LV_SYMBOL_LEFT " Retour");
@@ -571,7 +769,7 @@ void create_screen_setpoint() {
     lv_obj_t *btn_home = lv_btn_create(screen_setpoint);
     lv_obj_set_size(btn_home, 140, 50);
     lv_obj_align(btn_home, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, screen_monitoring);
+    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
     
     label = lv_label_create(btn_home);
     lv_label_set_text(label, LV_SYMBOL_HOME " Home");
@@ -580,12 +778,314 @@ void create_screen_setpoint() {
     lv_obj_t *btn_next = lv_btn_create(screen_setpoint);
     lv_obj_set_size(btn_next, 140, 50);
     lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, screen_correction);
+    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)2);
     
     label = lv_label_create(btn_next);
     lv_label_set_text(label, "Suivant " LV_SYMBOL_RIGHT);
     lv_obj_center(label);
 }
+// ✅ CRÉATION DES ÉCRANS MANQUANTS
+void create_screen_correction() {
+    screen_correction = lv_obj_create(NULL);
+    
+    // Header
+    lv_obj_t *header = lv_obj_create(screen_correction);
+    lv_obj_set_size(header, 480, 40);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x2C3E50), 0);
+    
+    lv_obj_t *label = lv_label_create(header);
+    lv_label_set_text(label, "CORRECTION VOLTAGE");
+    lv_obj_set_style_text_color(label, lv_color_hex(0xF1C40F), 0);
+    lv_obj_center(label);
+
+    // Affichage valeur
+    label = lv_label_create(screen_correction);
+    lv_label_set_text(label, "Facteur:");
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, -50);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
+    
+    label_correction_val = lv_label_create(screen_correction);
+    lv_label_set_text(label_correction_val, "1.00");
+    lv_obj_align(label_correction_val, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_font(label_correction_val, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(label_correction_val, lv_color_hex(0xFFAA00), 0);
+
+    // Boutons +/-
+    lv_obj_t *btn_up = lv_btn_create(screen_correction);
+    lv_obj_set_size(btn_up, 120, 70);
+    lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -20, -70);
+    lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
+    lv_obj_add_event_cb(btn_up, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)1);
+    
+    label = lv_label_create(btn_up);
+    lv_label_set_text(label, LV_SYMBOL_PLUS);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+
+    lv_obj_t *btn_down = lv_btn_create(screen_correction);
+    lv_obj_set_size(btn_down, 120, 70);
+    lv_obj_align(btn_down, LV_ALIGN_RIGHT_MID, -20, 70);
+    lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
+    lv_obj_add_event_cb(btn_down, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
+    label = lv_label_create(btn_down);
+    lv_label_set_text(label, LV_SYMBOL_MINUS);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+
+    // Navigation
+    lv_obj_t *btn_prev = lv_btn_create(screen_correction);
+    lv_obj_set_size(btn_prev, 140, 50);
+    lv_obj_align(btn_prev, LV_ALIGN_BOTTOM_LEFT, 10, -10);
+    lv_obj_add_event_cb(btn_prev, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)1);
+    
+    label = lv_label_create(btn_prev);
+    lv_label_set_text(label, LV_SYMBOL_LEFT " Retour");
+    lv_obj_center(label);
+
+    lv_obj_t *btn_home = lv_btn_create(screen_correction);
+    lv_obj_set_size(btn_home, 140, 50);
+    lv_obj_align(btn_home, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
+    
+    label = lv_label_create(btn_home);
+    lv_label_set_text(label, LV_SYMBOL_HOME " Home");
+    lv_obj_center(label);
+    
+    lv_obj_t *btn_next = lv_btn_create(screen_correction);
+    lv_obj_set_size(btn_next, 140, 50);
+    lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
+    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)3);
+    
+    label = lv_label_create(btn_next);
+    lv_label_set_text(label, "Suivant " LV_SYMBOL_RIGHT);
+    lv_obj_center(label);
+}
+
+void create_screen_kp() {
+    screen_kp = lv_obj_create(NULL);
+    
+    lv_obj_t *header = lv_obj_create(screen_kp);
+    lv_obj_set_size(header, 480, 40);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x2C3E50), 0);
+    
+    lv_obj_t *label = lv_label_create(header);
+    lv_label_set_text(label, "REGLAGE Kp");
+    lv_obj_set_style_text_color(label, lv_color_hex(0xF1C40F), 0);
+    lv_obj_center(label);
+
+    label = lv_label_create(screen_kp);
+    lv_label_set_text(label, "Kp:");
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, -50);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
+    
+    label_kp_val = lv_label_create(screen_kp);
+    lv_label_set_text(label_kp_val, "2.0");
+    lv_obj_align(label_kp_val, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_font(label_kp_val, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(label_kp_val, lv_color_hex(0xFF5555), 0);
+
+    lv_obj_t *btn_up = lv_btn_create(screen_kp);
+    lv_obj_set_size(btn_up, 120, 70);
+    lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -20, -70);
+    lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
+    lv_obj_add_event_cb(btn_up, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)1);
+    
+    label = lv_label_create(btn_up);
+    lv_label_set_text(label, LV_SYMBOL_PLUS);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+
+    lv_obj_t *btn_down = lv_btn_create(screen_kp);
+    lv_obj_set_size(btn_down, 120, 70);
+    lv_obj_align(btn_down, LV_ALIGN_RIGHT_MID, -20, 70);
+    lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
+    lv_obj_add_event_cb(btn_down, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
+    
+    label = lv_label_create(btn_down);
+    lv_label_set_text(label, LV_SYMBOL_MINUS);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+
+    lv_obj_t *btn_prev = lv_btn_create(screen_kp);
+    lv_obj_set_size(btn_prev, 140, 50);
+    lv_obj_align(btn_prev, LV_ALIGN_BOTTOM_LEFT, 10, -10);
+    lv_obj_add_event_cb(btn_prev, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)2);
+    
+    label = lv_label_create(btn_prev);
+    lv_label_set_text(label, LV_SYMBOL_LEFT " Retour");
+    lv_obj_center(label);
+
+    lv_obj_t *btn_home = lv_btn_create(screen_kp);
+    lv_obj_set_size(btn_home, 140, 50);
+    lv_obj_align(btn_home, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
+    
+    label = lv_label_create(btn_home);
+    lv_label_set_text(label, LV_SYMBOL_HOME " Home");
+    lv_obj_center(label);
+    
+    lv_obj_t *btn_next = lv_btn_create(screen_kp);
+    lv_obj_set_size(btn_next, 140, 50);
+    lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
+    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)4);
+    
+    label = lv_label_create(btn_next);
+    lv_label_set_text(label, "Suivant " LV_SYMBOL_RIGHT);
+    lv_obj_center(label);
+}
+
+void create_screen_ki() {
+    screen_ki = lv_obj_create(NULL);
+    
+    lv_obj_t *header = lv_obj_create(screen_ki);
+    lv_obj_set_size(header, 480, 40);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x2C3E50), 0);
+    
+    lv_obj_t *label = lv_label_create(header);
+    lv_label_set_text(label, "REGLAGE Ki");
+    lv_obj_set_style_text_color(label, lv_color_hex(0xF1C40F), 0);
+    lv_obj_center(label);
+
+    label = lv_label_create(screen_ki);
+    lv_label_set_text(label, "Ki:");
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, -50);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
+    
+    label_ki_val = lv_label_create(screen_ki);
+    lv_label_set_text(label_ki_val, "5.0");
+    lv_obj_align(label_ki_val, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_font(label_ki_val, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(label_ki_val, lv_color_hex(0xFF5555), 0);
+
+    lv_obj_t *btn_up = lv_btn_create(screen_ki);
+    lv_obj_set_size(btn_up, 120, 70);
+    lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -20, -70);
+    lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
+    lv_obj_add_event_cb(btn_up, btn_adjust_event_handler, LV_EVENT_CLICKED,(void*)(intptr_t)1);
+    
+    label = lv_label_create(btn_up);
+    lv_label_set_text(label, LV_SYMBOL_PLUS);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+
+    lv_obj_t *btn_down = lv_btn_create(screen_ki);
+    lv_obj_set_size(btn_down, 120, 70);
+    lv_obj_align(btn_down, LV_ALIGN_RIGHT_MID, -20, 70);
+    lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
+    lv_obj_add_event_cb(btn_down, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
+    
+    label = lv_label_create(btn_down);
+    lv_label_set_text(label, LV_SYMBOL_MINUS);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+
+    lv_obj_t *btn_prev = lv_btn_create(screen_ki);
+    lv_obj_set_size(btn_prev, 140, 50);
+    lv_obj_align(btn_prev, LV_ALIGN_BOTTOM_LEFT, 10, -10);
+    lv_obj_add_event_cb(btn_prev, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)3);
+    
+    label = lv_label_create(btn_prev);
+    lv_label_set_text(label, LV_SYMBOL_LEFT " Retour");
+    lv_obj_center(label);
+
+    lv_obj_t *btn_home = lv_btn_create(screen_ki);
+    lv_obj_set_size(btn_home, 140, 50);
+    lv_obj_align(btn_home, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
+    
+    label = lv_label_create(btn_home);
+    lv_label_set_text(label, LV_SYMBOL_HOME " Home");
+    lv_obj_center(label);
+    
+    lv_obj_t *btn_next = lv_btn_create(screen_ki);
+    lv_obj_set_size(btn_next, 140, 50);
+    lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
+    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)5);
+    
+    label = lv_label_create(btn_next);
+    lv_label_set_text(label, "Suivant " LV_SYMBOL_RIGHT);
+    lv_obj_center(label);
+}
+
+void create_screen_steps() {
+    screen_steps = lv_obj_create(NULL);
+    
+    lv_obj_t *header = lv_obj_create(screen_steps);
+    lv_obj_set_size(header, 480, 40);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x2C3E50), 0);
+    
+    lv_obj_t *label = lv_label_create(header);
+    lv_label_set_text(label, "STEPS/MM");
+    lv_obj_set_style_text_color(label, lv_color_hex(0xF1C40F), 0);
+    lv_obj_center(label);
+
+    label = lv_label_create(screen_steps);
+    lv_label_set_text(label, "Steps/mm:");
+    lv_obj_align(label, LV_ALIGN_CENTER, 0, -50);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
+    
+    label_steps_val = lv_label_create(screen_steps);
+    lv_label_set_text(label_steps_val, "400");
+    lv_obj_align(label_steps_val, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_font(label_steps_val, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(label_steps_val, lv_color_hex(0xFF5555), 0);
+
+    lv_obj_t *btn_up = lv_btn_create(screen_steps);
+    lv_obj_set_size(btn_up, 120, 70);
+    lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -20, -70);
+    lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
+    lv_obj_add_event_cb(btn_up, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)1);
+    
+    label = lv_label_create(btn_up);
+    lv_label_set_text(label, LV_SYMBOL_PLUS);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+
+    lv_obj_t *btn_down = lv_btn_create(screen_steps);
+    lv_obj_set_size(btn_down, 120, 70);
+    lv_obj_align(btn_down, LV_ALIGN_RIGHT_MID, -20, 70);
+    lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
+    lv_obj_add_event_cb(btn_down, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
+    
+    label = lv_label_create(btn_down);
+    lv_label_set_text(label, LV_SYMBOL_MINUS);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+
+    lv_obj_t *btn_prev = lv_btn_create(screen_steps);
+    lv_obj_set_size(btn_prev, 140, 50);
+    lv_obj_align(btn_prev, LV_ALIGN_BOTTOM_LEFT, 10, -10);
+    lv_obj_add_event_cb(btn_prev, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)4);
+    
+    label = lv_label_create(btn_prev);
+    lv_label_set_text(label, LV_SYMBOL_LEFT " Retour");
+    lv_obj_center(label);
+
+    lv_obj_t *btn_home = lv_btn_create(screen_steps);
+    lv_obj_set_size(btn_home, 140, 50);
+    lv_obj_align(btn_home, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
+    
+    label = lv_label_create(btn_home);
+    lv_label_set_text(label, LV_SYMBOL_HOME " Home");
+    lv_obj_center(label);
+    
+    lv_obj_t *btn_next = lv_btn_create(screen_steps);
+    lv_obj_set_size(btn_next, 140, 50);
+    lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
+    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
+    
+    label = lv_label_create(btn_next);
+    lv_label_set_text(label, LV_SYMBOL_HOME " Retour");
+    lv_obj_center(label);
+}
+
+
+
 void taskLvglTick(void *pvParameters) {
     for (;;) {
         lv_tick_inc(1);                 // ⬅️ 1 ms
@@ -645,13 +1145,31 @@ void lvgl_setup() {
         Serial.println("   ❌ ERREUR: Touch driver NON enregistré!");
     }
 
-    // Créer les écrans
+// ✅ CRÉER TOUS LES ÉCRANS
+    Serial.println("📄 Création des écrans..."); 
     create_screen_monitoring();
+    Serial.printf("   ✅ Monitoring créé: %p\n", screen_monitoring);
     create_screen_setpoint();
-    
+    Serial.printf("   ✅ Setpoint créé: %p\n", screen_setpoint);
+    create_screen_correction();
+    Serial.printf("   ✅ Correction créé: %p\n", screen_correction);
+    create_screen_kp();
+    Serial.printf("   ✅ Kp créé: %p\n", screen_kp);
+    create_screen_ki();
+    Serial.printf("   ✅ Ki créé: %p\n", screen_ki);
+    create_screen_steps();
+    Serial.printf("   ✅ Steps créé: %p\n", screen_steps);
+        // ✅ VÉRIFICATION CRITIQUE
+    if (screen_monitoring == NULL || screen_setpoint == NULL) {
+        Serial.println("❌ ERREUR FATALE: Écrans non créés!");
+        while(1) { delay(1000); } // Bloquer pour debug
+    }
     // Charger l'écran principal
     lv_scr_load(screen_monitoring);
     Serial.println("LVGL initialisé avec succès");
+    // ✅ DIAGNOSTIC FINAL
+    vTaskDelay(pdMS_TO_TICKS(500));
+    diagnose_lvgl_touch();
 }
 
 
@@ -761,7 +1279,7 @@ void taskUI(void *pvParameters) {
         }
         
         // === MISE À JOUR DES LABELS (avec données locales) ===
-        if (millis() - lastLabelUpdate >= 500) {
+        if (millis() - lastLabelUpdate >= 200) {
             update_lvgl_labels_safe(&local_data);
             lastLabelUpdate = millis();
         }
@@ -773,7 +1291,8 @@ void taskUI(void *pvParameters) {
             lastDebug = millis();
         }
         
-        vTaskDelay(pdMS_TO_TICKS(10));
+        
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
 
@@ -783,10 +1302,16 @@ void setup() {
   spiMutex = xSemaphoreCreateMutex();
   dataMutex = xSemaphoreCreateMutex();
 
+      if (!i2cMutex || !spiMutex || !dataMutex) {
+        Serial.println("❌ ERREUR création mutex!");
+        while(1);
+    }
+
   // --- 1. Initialisation EEPROM (Spécifique ESP32) ---
   // On réserve 512 octets de mémoire flash pour émuler l'EEPROM
   Serial.begin(115200);
-  
+  delay(1000);
+  diagnose_lvgl_touch();
   if (!EEPROM.begin(512)) {
     Serial.println("Failed to initialise EEPROM");
     delay(1000);
@@ -836,12 +1361,11 @@ void setup() {
     
     tft.writecommand(0x29); // Display ON
     delay(50);
-
-    ts.begin();
-    ts.setRotation(1); 
-  // Calibration tactile (à ajuster selon votre écran)
-    uint16_t calData[5] = { 303, 3529, 281, 3450, 7 };
-    // tft.setTouch(calData);
+    // ✅ INIT XPT2046 APRÈS TFT
+    if (!ts.begin()) {
+        Serial.println("❌ XPT2046 échec!");
+    }
+    ts.setRotation(1);
 
     // Initialisation LVGL (APRÈS TFT)
     lvgl_setup();
@@ -978,88 +1502,88 @@ void initializeEEPROM() {
     EEPROM.get(EEPROM_STEPS_MM_Z_ADDR, STEPS_PER_MM_Z);
     Serial.print("Loaded steps par mm: "); Serial.println(STEPS_PER_MM_Z, 4);
 }
-void checkButtonPress(int x, int y) {
-    static unsigned long lastButtonPress = 0;
+// void checkButtonPress(int x, int y) {
+//     static unsigned long lastButtonPress = 0;
     
-    // Anti-rebond : ignorer les touches trop rapprochées
-    if (millis() - lastButtonPress < 200) {
-        return;
-    }
+//     // Anti-rebond : ignorer les touches trop rapprochées
+//     if (millis() - lastButtonPress < 200) {
+//         return;
+//     }
     
-    // === ÉCRAN 0 : MONITORING ===
-    if (currentScreen == 0) {
-        // Bouton "Suivant" en bas à droite (150x50)
-        // Position approximative : x: 320-470, y: 260-310
-        if (x >= 320 && x <= 470 && y >= 260 && y <= 310) {
-            Serial.println("✅ MONITORING -> Bouton SUIVANT pressé!");
-            lv_scr_load_anim(screen_setpoint, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
-            currentScreen = 1;
-            lastButtonPress = millis();
-            return;
-        }
-    }
+//     // === ÉCRAN 0 : MONITORING ===
+//     if (currentScreen == 0) {
+//         // Bouton "Suivant" en bas à droite (150x50)
+//         // Position approximative : x: 320-470, y: 260-310
+//         if (x >= 320 && x <= 470 && y >= 260 && y <= 310) {
+//             Serial.println("✅ MONITORING -> Bouton SUIVANT pressé!");
+//             lv_scr_load_anim(screen_setpoint, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
+//             currentScreen = 1;
+//             lastButtonPress = millis();
+//             return;
+//         }
+//     }
     
-    // === ÉCRAN 1 : SETPOINT ===
-    else if (currentScreen == 1) {
-        // Bouton + (droite, haut) - 120x70
-        // Position approximative : x: 350-470, y: 80-150
-        if (x >= 350 && x <= 470 && y >= 80 && y <= 150) {
-            Serial.println("✅ SETPOINT -> Bouton + pressé!");
-            adjustCurrentSetting(1);
-            lastButtonPress = millis();
-            return;
-        }
+//     // === ÉCRAN 1 : SETPOINT ===
+//     else if (currentScreen == 1) {
+//         // Bouton + (droite, haut) - 120x70
+//         // Position approximative : x: 350-470, y: 80-150
+//         if (x >= 350 && x <= 470 && y >= 80 && y <= 150) {
+//             Serial.println("✅ SETPOINT -> Bouton + pressé!");
+//             adjustCurrentSetting(1);
+//             lastButtonPress = millis();
+//             return;
+//         }
         
-        // Bouton - (droite, bas) - 120x70
-        // Position approximative : x: 350-470, y: 170-240
-        if (x >= 350 && x <= 470 && y >= 170 && y <= 240) {
-            Serial.println("✅ SETPOINT -> Bouton - pressé!");
-            adjustCurrentSetting(-1);
-            lastButtonPress = millis();
-            return;
-        }
+//         // Bouton - (droite, bas) - 120x70
+//         // Position approximative : x: 350-470, y: 170-240
+//         if (x >= 350 && x <= 470 && y >= 170 && y <= 240) {
+//             Serial.println("✅ SETPOINT -> Bouton - pressé!");
+//             adjustCurrentSetting(-1);
+//             lastButtonPress = millis();
+//             return;
+//         }
         
-        // Bouton "Retour" (bas gauche) - 140x50
-        // Position approximative : x: 10-150, y: 260-310
-        if (x >= 10 && x <= 150 && y >= 260 && y <= 310) {
-          EEPROM.commit();
-            Serial.println("✅ SETPOINT -> Bouton RETOUR pressé!");
-            lv_scr_load_anim(screen_monitoring, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
-            currentScreen = 0;
-            lastButtonPress = millis();
-            return;
-        }
+//         // Bouton "Retour" (bas gauche) - 140x50
+//         // Position approximative : x: 10-150, y: 260-310
+//         if (x >= 10 && x <= 150 && y >= 260 && y <= 310) {
+//           EEPROM.commit();
+//             Serial.println("✅ SETPOINT -> Bouton RETOUR pressé!");
+//             lv_scr_load_anim(screen_monitoring, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
+//             currentScreen = 0;
+//             lastButtonPress = millis();
+//             return;
+//         }
         
-        // Bouton "Home" (bas centre) - 140x50
-        // Position approximative : x: 165-305, y: 260-310
-        if (x >= 165 && x <= 305 && y >= 260 && y <= 310) {
-          EEPROM.commit();
-            Serial.println("✅ SETPOINT -> Bouton HOME pressé!");
-            lv_scr_load_anim(screen_monitoring, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
-            currentScreen = 0;
-            lastButtonPress = millis();
-            return;
-        }
+//         // Bouton "Home" (bas centre) - 140x50
+//         // Position approximative : x: 165-305, y: 260-310
+//         if (x >= 165 && x <= 305 && y >= 260 && y <= 310) {
+//           EEPROM.commit();
+//             Serial.println("✅ SETPOINT -> Bouton HOME pressé!");
+//             lv_scr_load_anim(screen_monitoring, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
+//             currentScreen = 0;
+//             lastButtonPress = millis();
+//             return;
+//         }
         
-        // Bouton "Suivant" (bas droite) - 140x50
-        // Position approximative : x: 320-470, y: 260-310
-        if (x >= 320 && x <= 470 && y >= 260 && y <= 310) {
-          EEPROM.commit();
-            Serial.println("✅ SETPOINT -> Bouton SUIVANT pressé!");
-            // Charger le prochain écran (correction, kp, etc.)
-            if (screen_correction != NULL) {
-                lv_scr_load_anim(screen_correction, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
-                currentScreen = 2;
-            }
-            lastButtonPress = millis();
-            return;
-        }
-    }
+//         // Bouton "Suivant" (bas droite) - 140x50
+//         // Position approximative : x: 320-470, y: 260-310
+//         if (x >= 320 && x <= 470 && y >= 260 && y <= 310) {
+//           EEPROM.commit();
+//             Serial.println("✅ SETPOINT -> Bouton SUIVANT pressé!");
+//             // Charger le prochain écran (correction, kp, etc.)
+//             if (screen_correction != NULL) {
+//                 lv_scr_load_anim(screen_correction, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
+//                 currentScreen = 2;
+//             }
+//             lastButtonPress = millis();
+//             return;
+//         }
+//     }
     
-    // Ajouter d'autres écrans si nécessaire...
+//     // Ajouter d'autres écrans si nécessaire...
     
-    Serial.printf("   Touch hors zone bouton: (%d, %d)\n", x, y);
-}
+//     Serial.printf("   Touch hors zone bouton: (%d, %d)\n", x, y);
+// }
  void loop() {
     // ========================================
     // VARIABLES STATIQUES (déclarées UNE SEULE FOIS)
@@ -1093,86 +1617,86 @@ void checkButtonPress(int x, int y) {
     unsigned long loopStartTime = micros();
     unsigned long currentTime = millis();
     
-    // ========================================
-    // 1. GESTION TACTILE (avec calibration optionnelle)
-    // ========================================
-    if (millis() - lastTouchCheck >= (CALIBRATION_MODE ? 100 : 20)) {
-        if (xSemaphoreTake(spiMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-            bool is_touched = ts.touched();
+    // // ========================================
+    // // 1. GESTION TACTILE (avec calibration optionnelle)
+    // // ========================================
+    // if (millis() - lastTouchCheck >= (CALIBRATION_MODE ? 100 : 20)) {
+    //     if (xSemaphoreTake(spiMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+    //         bool is_touched = ts.touched();
             
-            if (is_touched && !was_touched) {
-                // Nouveau touch détecté
-                TS_Point p = ts.getPoint();
+    //         if (is_touched && !was_touched) {
+    //             // Nouveau touch détecté
+    //             TS_Point p = ts.getPoint();
                 
-                if (CALIBRATION_MODE) {
-                    // ====== MODE CALIBRATION ======
-                    Serial.println("\n=== CALIBRATION MODE ===");
-                    Serial.printf("Touch #%d - RAW: X=%d, Y=%d\n", touch_count + 1, p.x, p.y);
-                    Serial.println("Touchez dans cet ordre:");
-                    Serial.println("1. Coin HAUT-GAUCHE");
-                    Serial.println("2. Coin HAUT-DROITE");
-                    Serial.println("3. Coin BAS-GAUCHE");
-                    Serial.println("4. Coin BAS-DROITE");
+    //             if (CALIBRATION_MODE) {
+    //                 // ====== MODE CALIBRATION ======
+    //                 Serial.println("\n=== CALIBRATION MODE ===");
+    //                 Serial.printf("Touch #%d - RAW: X=%d, Y=%d\n", touch_count + 1, p.x, p.y);
+    //                 Serial.println("Touchez dans cet ordre:");
+    //                 Serial.println("1. Coin HAUT-GAUCHE");
+    //                 Serial.println("2. Coin HAUT-DROITE");
+    //                 Serial.println("3. Coin BAS-GAUCHE");
+    //                 Serial.println("4. Coin BAS-DROITE");
                     
-                    if (touch_count < 4) {
-                        corners[touch_count][0] = p.x;
-                        corners[touch_count][1] = p.y;
-                        touch_count++;
-                    }
+    //                 if (touch_count < 4) {
+    //                     corners[touch_count][0] = p.x;
+    //                     corners[touch_count][1] = p.y;
+    //                     touch_count++;
+    //                 }
                     
-                    // Après 4 touches, calculer les min/max
-                    if (touch_count == 4) {
-                        int x_min = min(min(corners[0][0], corners[2][0]), 4096);
-                        int x_max = max(max(corners[1][0], corners[3][0]), 0);
-                        int y_min = min(min(corners[0][1], corners[1][1]), 4096);
-                        int y_max = max(max(corners[2][1], corners[3][1]), 0);
+    //                 // Après 4 touches, calculer les min/max
+    //                 if (touch_count == 4) {
+    //                     int x_min = min(min(corners[0][0], corners[2][0]), 4096);
+    //                     int x_max = max(max(corners[1][0], corners[3][0]), 0);
+    //                     int y_min = min(min(corners[0][1], corners[1][1]), 4096);
+    //                     int y_max = max(max(corners[2][1], corners[3][1]), 0);
                         
-                        Serial.println("\n========== RÉSULTATS CALIBRATION ==========");
-                        Serial.printf("X_MIN = %d\n", x_min);
-                        Serial.printf("X_MAX = %d\n", x_max);
-                        Serial.printf("Y_MIN = %d\n", y_min);
-                        Serial.printf("Y_MAX = %d\n", y_max);
-                        Serial.println("\nModifiez votre code avec ces valeurs:");
-                        Serial.printf("int x = map(p.x, %d, %d, 0, 480);\n", x_min, x_max);
-                        Serial.printf("int y = map(p.y, %d, %d, 0, 320);\n", y_min, y_max);
-                        Serial.println("\nPuis mettez CALIBRATION_MODE = false;");
-                        Serial.println("==========================================\n");
+    //                     Serial.println("\n========== RÉSULTATS CALIBRATION ==========");
+    //                     Serial.printf("X_MIN = %d\n", x_min);
+    //                     Serial.printf("X_MAX = %d\n", x_max);
+    //                     Serial.printf("Y_MIN = %d\n", y_min);
+    //                     Serial.printf("Y_MAX = %d\n", y_max);
+    //                     Serial.println("\nModifiez votre code avec ces valeurs:");
+    //                     Serial.printf("int x = map(p.x, %d, %d, 0, 480);\n", x_min, x_max);
+    //                     Serial.printf("int y = map(p.y, %d, %d, 0, 320);\n", y_min, y_max);
+    //                     Serial.println("\nPuis mettez CALIBRATION_MODE = false;");
+    //                     Serial.println("==========================================\n");
                         
-                        // Reset pour recommencer
-                        touch_count = 0;
-                    }
+    //                     // Reset pour recommencer
+    //                     touch_count = 0;
+    //                 }
                     
-                } else {
-                    // ====== MODE NORMAL ======
-                    int x = map(p.x, 3900, 360, 0, SCREEN_WIDTH);  // ⚠️ À remplacer après calibration
-                    int y = map(p.y, 3800, 340, 0, SCREEN_HEIGHT); // ⚠️ À remplacer après calibration
+    //             } else {
+    //                 // ====== MODE NORMAL ======
+    //                 int x = map(p.x, 3900, 360, 0, SCREEN_WIDTH);  // ⚠️ À remplacer après calibration
+    //                 int y = map(p.y, 3800, 340, 0, SCREEN_HEIGHT); // ⚠️ À remplacer après calibration
                     
-                    // Détecter mouvement significatif
-                    if (!was_touched || abs(x - last_x) > 10 || abs(y - last_y) > 10) {
-                        Serial.printf("🎯 TOUCH: RAW(%d,%d) -> MAP(%d,%d)\n", p.x, p.y, x, y);
+    //                 // Détecter mouvement significatif
+    //                 if (!was_touched || abs(x - last_x) > 10 || abs(y - last_y) > 10) {
+    //                     Serial.printf("🎯 TOUCH: RAW(%d,%d) -> MAP(%d,%d)\n", p.x, p.y, x, y);
                         
-                        // Gestion des boutons
-                        checkButtonPress(x, y);
+    //                     // Gestion des boutons
+    //                     checkButtonPress(x, y);
                         
-                        last_x = x;
-                        last_y = y;
-                    }
-                }
+    //                     last_x = x;
+    //                     last_y = y;
+    //                 }
+    //             }
                 
-                was_touched = true;
+    //             was_touched = true;
                 
-            } else if (!is_touched && was_touched) {
-                // Release
-                if (!CALIBRATION_MODE) {
-                    Serial.println("🎯 RELEASE");
-                }
-                was_touched = false;
-            }
+    //         } else if (!is_touched && was_touched) {
+    //             // Release
+    //             if (!CALIBRATION_MODE) {
+    //                 Serial.println("🎯 RELEASE");
+    //             }
+    //             was_touched = false;
+    //         }
             
-            xSemaphoreGive(spiMutex);
-        }
-        lastTouchCheck = millis();
-    }
+    //         xSemaphoreGive(spiMutex);
+    //     }
+    //     lastTouchCheck = millis();
+    // }
     
     // ========================================
     // 2. RESTE DU CODE (seulement si pas en calibration)
@@ -1293,55 +1817,55 @@ void checkButtonPress(int x, int y) {
         }
     }
 }
-void adjustCurrentSetting(int direction) {
-    float increment = 0.0;
+// void adjustCurrentSetting(int direction) {
+//     float increment = 0.0;
     
-    switch(currentScreen) {
-        case 0: // Monitoring - read only
-            Serial.println("Monitoring screen - no adjustment");
-            break;
+//     switch(currentScreen) {
+//         case 0: // Monitoring - read only
+//             Serial.println("Monitoring screen - no adjustment");
+//             break;
             
-        case 1: // Setpoint
-            increment = 1.0;
-            Setpoint += direction * increment;
-            Setpoint = constrain(Setpoint, 80.0, 200.0);
-            EEPROM.put(EEPROM_SETPOINT_ADDR, (float)Setpoint);
+//         case 1: // Setpoint
+//             increment = 1.0;
+//             Setpoint += direction * increment;
+//             Setpoint = constrain(Setpoint, 80.0, 200.0);
+//             EEPROM.put(EEPROM_SETPOINT_ADDR, (float)Setpoint);
             
-            break;
+//             break;
             
-        case 2: // Voltage correction factor
-            increment = 0.01;
-            temp_voltage_correction_factor += direction * increment;
-            temp_voltage_correction_factor = constrain(temp_voltage_correction_factor, 0.5, 2.0);
-            break;
+//         case 2: // Voltage correction factor
+//             increment = 0.01;
+//             temp_voltage_correction_factor += direction * increment;
+//             temp_voltage_correction_factor = constrain(temp_voltage_correction_factor, 0.5, 2.0);
+//             break;
           
-        case 3: // Kp
-            increment = 0.5;
-            Kp += direction * increment;
-            Kp = constrain(Kp, 0.0, 10.0);
-            myPID.SetTunings(Kp, Ki, Kd);
-            EEPROM.put(EEPROM_KP_ADDR,(float)Kp);
+//         case 3: // Kp
+//             increment = 0.5;
+//             Kp += direction * increment;
+//             Kp = constrain(Kp, 0.0, 10.0);
+//             myPID.SetTunings(Kp, Ki, Kd);
+//             EEPROM.put(EEPROM_KP_ADDR,(float)Kp);
             
-            break;
+//             break;
             
-        case 4: // Ki
-            increment = 0.1;
-            Ki += direction * increment;
-            Ki = constrain(Ki, 0.0, 10.0);
-            myPID.SetTunings(Kp, Ki, Kd);
-            EEPROM.put(EEPROM_KI_ADDR, (float)Ki);
+//         case 4: // Ki
+//             increment = 0.1;
+//             Ki += direction * increment;
+//             Ki = constrain(Ki, 0.0, 10.0);
+//             myPID.SetTunings(Kp, Ki, Kd);
+//             EEPROM.put(EEPROM_KI_ADDR, (float)Ki);
             
-            break;
+//             break;
 
-            case 5: // Steps pas mm
-            increment = 1;
-            STEPS_PER_MM_Z += direction * increment;
-            STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 200.0, 2000.0);
-            EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, (float)STEPS_PER_MM_Z);
-            break;
-    }
-    // updateDisplay();
-}
+//             case 5: // Steps pas mm
+//             increment = 1;
+//             STEPS_PER_MM_Z += direction * increment;
+//             STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 200.0, 2000.0);
+//             EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, (float)STEPS_PER_MM_Z);
+//             break;
+//     }
+//     // updateDisplay();
+// }
 
 
 void navigateScreen(int direction) {
