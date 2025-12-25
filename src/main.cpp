@@ -278,6 +278,25 @@ lv_obj_t *label_kp_val;
 lv_obj_t *label_ki_val;
 lv_obj_t *label_steps_val;
 
+
+lv_obj_t *screen_settings;
+lv_obj_t *label_param_name;
+lv_obj_t *label_param_value;
+int selected_param = 0;  // 0=Setpoint, 1=Correction, 2=Kp, 3=Ki, 4=Steps
+
+const char* param_names[] = {
+    "Setpoint (V)",
+    "Correction",
+    "Kp",
+    "Ki",
+    "Steps/mm"
+};
+
+void btn_change_param_event(lv_event_t *e);
+void btn_adjust_multi_event(lv_event_t *e);
+void update_param_value_display();
+void create_screen_settings();
+
 // ========================================
 // PARTIE 2 : CALLBACKS LVGL (Driver Display + Tactile)
 // ========================================
@@ -487,6 +506,7 @@ void btn_nav_event_handler(lv_event_t *e) {
             case 5: 
                 target_screen = screen_steps;
                 break;
+            case 6: target_screen = screen_settings; break;
         }
         
         // ✅ VÉRIFICATION CRITIQUE AVANT lv_scr_load_anim
@@ -636,6 +656,92 @@ void create_screen_monitoring() {
     label = lv_label_create(btn_next);
     lv_label_set_text(label, LV_SYMBOL_RIGHT " Suivant");
     lv_obj_center(label);
+}
+
+// Callback pour changer de paramètre
+void btn_change_param_event(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_CLICKED) {
+        int direction = (int)(intptr_t)lv_event_get_user_data(e);
+        
+        selected_param += direction;
+        
+        // Boucler entre 0 et 4
+        if (selected_param < 0) selected_param = 4;
+        if (selected_param > 4) selected_param = 0;
+        
+        // Mettre à jour l'affichage
+        lv_label_set_text(label_param_name, param_names[selected_param]);
+        update_param_value_display();
+        
+        Serial.printf("Paramètre sélectionné: %s\n", param_names[selected_param]);
+    }
+}
+
+// Callback pour ajuster la valeur
+void btn_adjust_multi_event(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_CLICKED) {
+        int direction = (int)(intptr_t)lv_event_get_user_data(e);
+        char buf[32];
+        
+        switch(selected_param) {
+            case 0: // Setpoint
+                Setpoint += direction * 1.0;
+                Setpoint = constrain(Setpoint, 80.0, 200.0);
+                EEPROM.put(EEPROM_SETPOINT_ADDR, (float)Setpoint);
+                snprintf(buf, sizeof(buf), "%.1f", Setpoint);
+                break;
+                
+            case 1: // Correction
+                voltage_correction_factor += direction * 0.01;
+                voltage_correction_factor = constrain(voltage_correction_factor, 0.5, 2.0);
+                EEPROM.put(EEPROM_CORRECTION_FACTOR_ADDR, (float)voltage_correction_factor);
+                snprintf(buf, sizeof(buf), "%.2f", voltage_correction_factor);
+                break;
+                
+            case 2: // Kp
+                Kp += direction * 0.5;
+                Kp = constrain(Kp, 0.0, 10.0);
+                myPID.SetTunings(Kp, Ki, Kd);
+                EEPROM.put(EEPROM_KP_ADDR, (float)Kp);
+                snprintf(buf, sizeof(buf), "%.1f", Kp);
+                break;
+                
+            case 3: // Ki
+                Ki += direction * 0.1;
+                Ki = constrain(Ki, 0.0, 10.0);
+                myPID.SetTunings(Kp, Ki, Kd);
+                EEPROM.put(EEPROM_KI_ADDR, (float)Ki);
+                snprintf(buf, sizeof(buf), "%.1f", Ki);
+                break;
+                
+            case 4: // Steps
+                STEPS_PER_MM_Z += direction * 10.0;
+                STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 200.0, 2000.0);
+                EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, (float)STEPS_PER_MM_Z);
+                snprintf(buf, sizeof(buf), "%.0f", STEPS_PER_MM_Z);
+                break;
+        }
+        
+        lv_label_set_text(label_param_value, buf);
+    }
+}
+
+void update_param_value_display() {
+    char buf[32];
+    
+    switch(selected_param) {
+        case 0: snprintf(buf, sizeof(buf), "%.1f", Setpoint); break;
+        case 1: snprintf(buf, sizeof(buf), "%.2f", voltage_correction_factor); break;
+        case 2: snprintf(buf, sizeof(buf), "%.1f", Kp); break;
+        case 3: snprintf(buf, sizeof(buf), "%.1f", Ki); break;
+        case 4: snprintf(buf, sizeof(buf), "%.0f", STEPS_PER_MM_Z); break;
+    }
+    
+    lv_label_set_text(label_param_value, buf);
 }
 
 void create_screen_setpoint() {
@@ -1009,10 +1115,95 @@ void create_screen_steps() {
     lv_obj_t *btn_next = lv_btn_create(screen_steps);
     lv_obj_set_size(btn_next, 140, 50);
     lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
+    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)6);
     
     label = lv_label_create(btn_next);
     lv_label_set_text(label, LV_SYMBOL_HOME " Retour");
+    lv_obj_center(label);
+}
+
+
+void create_screen_settings() {
+    screen_settings = lv_obj_create(NULL);
+    
+    // === HEADER ===
+    lv_obj_t *header = lv_obj_create(screen_settings);
+    lv_obj_set_size(header, 480, 40);
+    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0x2C3E50), 0);
+    
+    lv_obj_t *label = lv_label_create(header);
+    lv_label_set_text(label, "REGLAGES RAPIDES");
+    lv_obj_set_style_text_color(label, lv_color_hex(0xF1C40F), 0);
+    lv_obj_center(label);
+    
+    // === NOM DU PARAMÈTRE ===
+    label_param_name = lv_label_create(screen_settings);
+    lv_label_set_text(label_param_name, param_names[0]);
+    lv_obj_align(label_param_name, LV_ALIGN_TOP_MID, 0, 60);
+    lv_obj_set_style_text_font(label_param_name, &lv_font_montserrat_24, 0);
+    
+    // === VALEUR DU PARAMÈTRE ===
+    label_param_value = lv_label_create(screen_settings);
+    lv_label_set_text(label_param_value, "110.0");
+    lv_obj_align(label_param_value, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_text_font(label_param_value, &lv_font_montserrat_48, 0);
+    lv_obj_set_style_text_color(label_param_value, lv_color_hex(0x00FFFF), 0);
+    
+    // === BOUTONS SÉLECTION PARAMÈTRE (◀ ▶) ===
+    lv_obj_t *btn_prev_param = lv_btn_create(screen_settings);
+    lv_obj_set_size(btn_prev_param, 80, 60);
+    lv_obj_align(btn_prev_param, LV_ALIGN_LEFT_MID, 20, 0);
+    lv_obj_set_style_bg_color(btn_prev_param, lv_color_hex(0x3498DB), 0);
+    lv_obj_add_event_cb(btn_prev_param, btn_change_param_event, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
+    
+    label = lv_label_create(btn_prev_param);
+    lv_label_set_text(label, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+    
+    lv_obj_t *btn_next_param = lv_btn_create(screen_settings);
+    lv_obj_set_size(btn_next_param, 80, 60);
+    lv_obj_align(btn_next_param, LV_ALIGN_RIGHT_MID, -20, 0);
+    lv_obj_set_style_bg_color(btn_next_param, lv_color_hex(0x3498DB), 0);
+    lv_obj_add_event_cb(btn_next_param, btn_change_param_event, LV_EVENT_CLICKED, (void*)(intptr_t)1);
+    
+    label = lv_label_create(btn_next_param);
+    lv_label_set_text(label, LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+    
+    // === BOUTONS +/- VALEUR ===
+    lv_obj_t *btn_up = lv_btn_create(screen_settings);
+    lv_obj_set_size(btn_up, 100, 60);
+    lv_obj_align(btn_up, LV_ALIGN_BOTTOM_RIGHT, -20, -80);
+    lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
+    lv_obj_add_event_cb(btn_up, btn_adjust_multi_event, LV_EVENT_CLICKED, (void*)(intptr_t)1);
+    
+    label = lv_label_create(btn_up);
+    lv_label_set_text(label, LV_SYMBOL_PLUS);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+    
+    lv_obj_t *btn_down = lv_btn_create(screen_settings);
+    lv_obj_set_size(btn_down, 100, 60);
+    lv_obj_align(btn_down, LV_ALIGN_BOTTOM_LEFT, 20, -80);
+    lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
+    lv_obj_add_event_cb(btn_down, btn_adjust_multi_event, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
+    
+    label = lv_label_create(btn_down);
+    lv_label_set_text(label, LV_SYMBOL_MINUS);
+    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
+    lv_obj_center(label);
+    
+    // === BOUTON HOME ===
+    lv_obj_t *btn_home = lv_btn_create(screen_settings);
+    lv_obj_set_size(btn_home, 140, 50);
+    lv_obj_align(btn_home, LV_ALIGN_BOTTOM_MID, 0, -10);
+    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
+    
+    label = lv_label_create(btn_home);
+    lv_label_set_text(label, LV_SYMBOL_HOME " Home");
     lv_obj_center(label);
 }
 
@@ -1091,6 +1282,8 @@ void lvgl_setup() {
     Serial.printf("   ✅ Ki créé: %p\n", screen_ki);
     create_screen_steps();
     Serial.printf("   ✅ Steps créé: %p\n", screen_steps);
+    create_screen_settings();
+    Serial.printf("   ✅ Settings créé: %p\n", screen_settings);
         // ✅ VÉRIFICATION CRITIQUE
     if (screen_monitoring == NULL || screen_setpoint == NULL) {
         Serial.println("❌ ERREUR FATALE: Écrans non créés!");
