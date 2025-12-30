@@ -16,6 +16,7 @@ extern XPT2046_Touchscreen ts;
 extern SemaphoreHandle_t spiMutex;
 extern SemaphoreHandle_t i2cMutex;
 extern SemaphoreHandle_t dataMutex;
+extern SemaphoreHandle_t graphMutex;
 
 // EEPROM addresses for parameters (Rien ne change ici)
 #define EEPROM_SETPOINT_ADDR 0
@@ -90,6 +91,7 @@ void create_screen_steps();
 void create_screen_settings();
 
 // Callbacks
+void btn_save_eeprom_event(lv_event_t *e) ;
 void btn_nav_event_handler(lv_event_t *e);
 void btn_adjust_event_handler(lv_event_t *e);
 void btn_change_param_event(lv_event_t *e);

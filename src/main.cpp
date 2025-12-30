@@ -179,6 +179,9 @@ unsigned long last_position_record_time = 0;
  unsigned long last_eeprom_write = 0;
 const unsigned long EEPROM_WRITE_INTERVAL = 1000;
 
+// Temporary variable for voltage correction factor adjustment
+// float temp_voltage_correction_factor = DEFAULT_CORRECTION_FACTOR;
+
 // === OVERSAMPLING NON-BLOQUANT pour PID ultra-stable ===
 #define OVERSAMPLE_TARGET 10  // 10 samples ~10ms @1kHz
  float oversample_sum = 0.0;

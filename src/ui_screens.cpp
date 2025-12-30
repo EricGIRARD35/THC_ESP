@@ -48,6 +48,7 @@ lv_obj_t *label_steps_val = NULL;
 lv_obj_t *label_param_name = NULL;
 lv_obj_t *label_param_value = NULL;
 int selected_param = 0;
+lv_obj_t * btn_save; //bouton save EEPROM
 
 const char* param_names[] = {
     "Setpoint (V)",
@@ -65,9 +66,9 @@ static lv_color_t buf1[LVGL_BUFFER_SIZE];
 static lv_disp_drv_t disp_drv;
 static lv_indev_drv_t indev_drv;
 
-// ========================================
-// IMPLÉMENTATION DES FONCTIONS
-// ========================================
+// ========================
+// CRÉATION DES ÉCRANS LVGL
+// ========================
 
 void create_screen_monitoring() {
     Serial.println("🏗️ Création screen_monitoring...");
@@ -186,6 +187,16 @@ void create_screen_monitoring() {
     lv_label_set_text(label, LV_SYMBOL_RIGHT " Suivant");
     lv_obj_center(label);
     
+    // === BOUTONS PARAMETRES ===
+    lv_obj_t *btn_setting = lv_btn_create(screen_monitoring);
+    lv_obj_set_size(btn_setting, 150, 50);
+    lv_obj_align(btn_setting, LV_ALIGN_BOTTOM_LEFT, 10, -10);
+    lv_obj_add_event_cb(btn_setting, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)6);
+    
+    label = lv_label_create(btn_setting);
+    lv_label_set_text(label, LV_SYMBOL_SETTINGS " Parametres");
+    lv_obj_center(label);
+
     Serial.printf("✅ screen_monitoring créé: %p\n", screen_monitoring);
 }
 
@@ -561,13 +572,12 @@ void create_screen_steps() {
     lv_obj_t *btn_next = lv_btn_create(screen_steps);
     lv_obj_set_size(btn_next, 140, 50);
     lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)6);
+    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
     
     label = lv_label_create(btn_next);
     lv_label_set_text(label, LV_SYMBOL_HOME " Retour");
     lv_obj_center(label);
 }
-
 
 void create_screen_settings() {
     screen_settings = lv_obj_create(NULL);
@@ -594,12 +604,12 @@ void create_screen_settings() {
     lv_label_set_text(label_param_value, "110.0");
     lv_obj_align(label_param_value, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_text_font(label_param_value, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(label_param_value, lv_color_hex(0x00FFFF), 0);
+    lv_obj_set_style_text_color(label_param_value, lv_color_hex(0xF1C40F), 0);
     
     // === BOUTONS SÉLECTION PARAMÈTRE (◀ ▶) ===
     lv_obj_t *btn_prev_param = lv_btn_create(screen_settings);
-    lv_obj_set_size(btn_prev_param, 80, 60);
-    lv_obj_align(btn_prev_param, LV_ALIGN_LEFT_MID, 20, 0);
+    lv_obj_set_size(btn_prev_param, 100, 60);
+    lv_obj_align(btn_prev_param, LV_ALIGN_LEFT_MID, 20, -70);
     lv_obj_set_style_bg_color(btn_prev_param, lv_color_hex(0x3498DB), 0);
     lv_obj_add_event_cb(btn_prev_param, btn_change_param_event, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
     
@@ -609,8 +619,8 @@ void create_screen_settings() {
     lv_obj_center(label);
     
     lv_obj_t *btn_next_param = lv_btn_create(screen_settings);
-    lv_obj_set_size(btn_next_param, 80, 60);
-    lv_obj_align(btn_next_param, LV_ALIGN_RIGHT_MID, -20, 0);
+    lv_obj_set_size(btn_next_param, 100, 60);
+    lv_obj_align(btn_next_param, LV_ALIGN_RIGHT_MID, -20, -70);
     lv_obj_set_style_bg_color(btn_next_param, lv_color_hex(0x3498DB), 0);
     lv_obj_add_event_cb(btn_next_param, btn_change_param_event, LV_EVENT_CLICKED, (void*)(intptr_t)1);
     
@@ -622,7 +632,7 @@ void create_screen_settings() {
     // === BOUTONS +/- VALEUR ===
     lv_obj_t *btn_up = lv_btn_create(screen_settings);
     lv_obj_set_size(btn_up, 100, 60);
-    lv_obj_align(btn_up, LV_ALIGN_BOTTOM_RIGHT, -20, -80);
+    lv_obj_align(btn_up, LV_ALIGN_BOTTOM_RIGHT, -20, 0);
     lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
     lv_obj_add_event_cb(btn_up, btn_adjust_multi_event, LV_EVENT_CLICKED, (void*)(intptr_t)1);
     
@@ -633,7 +643,7 @@ void create_screen_settings() {
     
     lv_obj_t *btn_down = lv_btn_create(screen_settings);
     lv_obj_set_size(btn_down, 100, 60);
-    lv_obj_align(btn_down, LV_ALIGN_BOTTOM_LEFT, 20, -80);
+    lv_obj_align(btn_down, LV_ALIGN_BOTTOM_LEFT, 20, 0);
     lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
     lv_obj_add_event_cb(btn_down, btn_adjust_multi_event, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
     
@@ -651,9 +661,49 @@ void create_screen_settings() {
     label = lv_label_create(btn_home);
     lv_label_set_text(label, LV_SYMBOL_HOME " Home");
     lv_obj_center(label);
+
+    // === BOUTON SAVE EEPROM ===
+    btn_save = lv_btn_create(screen_settings);
+    lv_obj_set_size(btn_save, 100, 50);
+    // Placé à côté du bouton Home
+    lv_obj_align(btn_save, LV_ALIGN_BOTTOM_MID, 0, -70); 
+    lv_obj_set_style_bg_color(btn_save, lv_color_hex(0x95A5A6), 0); // Gris
+
+    // On lie ce bouton à un nouveau handler
+    lv_obj_add_event_cb(btn_save, btn_save_eeprom_event, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *label_save = lv_label_create(btn_save);
+    lv_label_set_text(label_save, LV_SYMBOL_SAVE " SAVE");
+    lv_obj_center(label_save);
 }
-
-
+//===================================
+// GESTION DES ÉVÉNEMENTS DES BOUTONS
+//===================================
+void btn_save_eeprom_event(lv_event_t *e) {
+    lv_event_code_t code = lv_event_get_code(e);
+    
+    if (code == LV_EVENT_CLICKED) {
+        Serial.println("💾 Sauvegarde manuelle de tous les paramètres...");
+        
+        // On écrit toutes les valeurs actuelles de la RAM vers l'EEPROM
+        EEPROM.put(EEPROM_SETPOINT_ADDR, (float)Setpoint);
+        EEPROM.put(EEPROM_CORRECTION_FACTOR_ADDR, (float)voltage_correction_factor);
+        EEPROM.put(EEPROM_KP_ADDR, (float)Kp);
+        EEPROM.put(EEPROM_KI_ADDR, (float)Ki);
+        EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, (float)STEPS_PER_MM_Z);
+        
+        // Le commit final qui valide l'écriture physique
+        if (EEPROM.commit()) {
+            Serial.println("✅ EEPROM validée avec succès !");
+            
+            // Petit feedback visuel rapide sur le bouton
+            lv_obj_t * btn = lv_event_get_target(e);
+            lv_obj_set_style_bg_color(btn, lv_color_hex(0x95A5A6), 0); // Devient gris
+        } else {
+            Serial.println("❌ Erreur lors du commit EEPROM");
+        }
+    }
+}
 
 void btn_nav_event_handler(lv_event_t *e) {
     
@@ -712,11 +762,7 @@ void btn_nav_event_handler(lv_event_t *e) {
         }
         
         Serial.println("   ✅ Tous les checks OK, lancement animation...");
-        
-        // Sauvegarder EEPROM
-        EEPROM.commit();
-        Serial.println("💾 EEPROM sauvegardée");
-        
+               
         // Mise à jour currentScreen
         currentScreen = target_screen_id;
         
@@ -757,7 +803,6 @@ void btn_adjust_event_handler(lv_event_t *e) {
                 increment = 1.0;
                 Setpoint += direction * increment;
                 Setpoint = constrain(Setpoint, 80.0, 200.0);
-                EEPROM.put(EEPROM_SETPOINT_ADDR, (float)Setpoint);
                 
                 if (label_setpoint_val != NULL) {
                     snprintf(buf, sizeof(buf), "%.1f", Setpoint);
@@ -770,7 +815,6 @@ void btn_adjust_event_handler(lv_event_t *e) {
                 increment = 0.01;
                 voltage_correction_factor += direction * increment;
                 voltage_correction_factor = constrain(voltage_correction_factor, 0.5, 2.0);
-                EEPROM.put(EEPROM_CORRECTION_FACTOR_ADDR, (float)voltage_correction_factor);
                 
                 if (label_correction_val != NULL) {
                     snprintf(buf, sizeof(buf), "%.2f", voltage_correction_factor);
@@ -787,7 +831,6 @@ void btn_adjust_event_handler(lv_event_t *e) {
                 Kp += direction * increment;
                 Kp = constrain(Kp, 0.0, 10.0);
                 myPID.SetTunings(Kp, Ki, Kd);
-                EEPROM.put(EEPROM_KP_ADDR, (float)Kp);
                 
                 if (label_kp_val != NULL) {
                     snprintf(buf, sizeof(buf), "%.1f", Kp);
@@ -801,7 +844,6 @@ void btn_adjust_event_handler(lv_event_t *e) {
                 Ki += direction * increment;
                 Ki = constrain(Ki, 0.0, 10.0);
                 myPID.SetTunings(Kp, Ki, Kd);
-                EEPROM.put(EEPROM_KI_ADDR, (float)Ki);
                 
                 if (label_ki_val != NULL) {
                     snprintf(buf, sizeof(buf), "%.1f", Ki);
@@ -814,7 +856,6 @@ void btn_adjust_event_handler(lv_event_t *e) {
                 increment = 10.0;
                 STEPS_PER_MM_Z += direction * increment;
                 STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 200.0, 2000.0);
-                EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, (float)STEPS_PER_MM_Z);
                 
                 if (label_steps_val != NULL) {
                     snprintf(buf, sizeof(buf), "%.0f", STEPS_PER_MM_Z);
@@ -823,6 +864,10 @@ void btn_adjust_event_handler(lv_event_t *e) {
                 Serial.printf("Steps/mm: %.0f\n", STEPS_PER_MM_Z);
                 break;
         }
+            // On passe le bouton Save en rouge pour dire "Attention, pas enregistré !"
+            if(btn_save != NULL) {
+            lv_obj_set_style_bg_color(btn_save, lv_color_hex(0xE74C3C), 0); //rouge
+            }
     }
 }
 
@@ -859,14 +904,12 @@ void btn_adjust_multi_event(lv_event_t *e) {
             case 0: // Setpoint
                 Setpoint += direction * 1.0;
                 Setpoint = constrain(Setpoint, 80.0, 200.0);
-                EEPROM.put(EEPROM_SETPOINT_ADDR, (float)Setpoint);
                 snprintf(buf, sizeof(buf), "%.1f", Setpoint);
                 break;
                 
             case 1: // Correction
                 voltage_correction_factor += direction * 0.01;
                 voltage_correction_factor = constrain(voltage_correction_factor, 0.5, 2.0);
-                EEPROM.put(EEPROM_CORRECTION_FACTOR_ADDR, (float)voltage_correction_factor);
                 snprintf(buf, sizeof(buf), "%.2f", voltage_correction_factor);
                 break;
                 
@@ -874,7 +917,6 @@ void btn_adjust_multi_event(lv_event_t *e) {
                 Kp += direction * 0.5;
                 Kp = constrain(Kp, 0.0, 10.0);
                 myPID.SetTunings(Kp, Ki, Kd);
-                EEPROM.put(EEPROM_KP_ADDR, (float)Kp);
                 snprintf(buf, sizeof(buf), "%.1f", Kp);
                 break;
                 
@@ -882,17 +924,22 @@ void btn_adjust_multi_event(lv_event_t *e) {
                 Ki += direction * 0.1;
                 Ki = constrain(Ki, 0.0, 10.0);
                 myPID.SetTunings(Kp, Ki, Kd);
-                EEPROM.put(EEPROM_KI_ADDR, (float)Ki);
                 snprintf(buf, sizeof(buf), "%.1f", Ki);
                 break;
                 
             case 4: // Steps
                 STEPS_PER_MM_Z += direction * 10.0;
                 STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 200.0, 2000.0);
-                EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, (float)STEPS_PER_MM_Z);
                 snprintf(buf, sizeof(buf), "%.0f", STEPS_PER_MM_Z);
                 break;
         }
+        // On passe le bouton Save en rouge pour dire "Attention, pas enregistré !"
+            if (btn_save == NULL) {
+                Serial.println("Erreur : btn_save est NULL, impossible de changer la couleur !");
+            } else {
+                Serial.println("Tentative de changement de couleur vers ROUGE...");
+                lv_obj_set_style_bg_color(btn_save, lv_color_hex(0xFF0000), 0);
+            }
         
         lv_label_set_text(label_param_value, buf);
     }
@@ -1021,13 +1068,6 @@ void update_lvgl_labels_safe(DisplayData* data) {
     lv_obj_invalidate(label_arc_state);
 }
 
-
-
-
-// ========================================
-// PARTIE 2 : CALLBACKS LVGL (Driver Display + Tactile)
-// ========================================
-
 // Fonction appelée par LVGL pour dessiner
 void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
     uint32_t w = (area->x2 - area->x1 + 1);
@@ -1084,12 +1124,6 @@ void lv_touchpad_read(lv_indev_drv_t * indev, lv_indev_data_t * data) {
         // Si timeout SPI, relâcher le touch
         data->state = LV_INDEV_STATE_REL;
     }
-}
-
-void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
-    uint16_t touchX, touchY;
-    bool touched = tft.getTouch(&touchX, &touchY);
-
 }
 
 void lvgl_setup() {
