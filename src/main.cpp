@@ -8,6 +8,7 @@
 #include <Adafruit_ADS1X15.h>
 #include <XPT2046_Touchscreen.h>
 #include <SPI.h>
+#include "ui_screens.h"
 
 
 // --- THC pour ESP32 ---
@@ -58,20 +59,7 @@ SemaphoreHandle_t i2cMutex;
 SemaphoreHandle_t spiMutex;
 SemaphoreHandle_t dataMutex;  
 
-// Variables à protéger
-struct DisplayData {
-    float fast_voltage;
-    float slow_voltage;
-    float setpoint;
-    long position;
-    bool thc_active;
-    bool enable_active;
-    bool anti_dive_active;
-    bool arc_ok;
-};
-
 DisplayData display_data = {0}; 
-
 
 // Pleine échelle de l'ADS1115 (FSR - Full Scale Range) en volts.
 // Nous allons configurer l'ADC pour utiliser un gain de 1 (GAIN_1), ce qui donne ±4.096V.
@@ -95,18 +83,11 @@ void handleTouchInput(uint16_t x, uint16_t y);
 void flashButton(int x1, int y1, int x2, int y2, uint16_t color);
 void  lv_scr_load();
 
-// EEPROM addresses for parameters (Rien ne change ici)
-#define EEPROM_SETPOINT_ADDR 0
-#define EEPROM_CORRECTION_FACTOR_ADDR 4
-#define EEPROM_STEPS_MM_Z_ADDR 8
-#define EEPROM_KP_ADDR 16
-#define EEPROM_KI_ADDR 20
-#define EEPROM_KD_ADDR 24
-#define EEPROM_INITIALIZED_FLAG 28
+
 
 // Parametres par défaut
 const float DEFAULT_SETPOINT = 110.0; //Attention valeur de DEFAULT stocké sur 4 octets mais utilisé en double pour le PID
-const float DEFAULT_CORRECTION_FACTOR = 1.0;
+float slow_lp = 0.0f;
 const float DEFAULT_STEP_PER_MM = 400;
 const float DEFAULT_KP = 2; // attention l'action proportionnel agit dans ce cas comme une action intégrale en agissant sur la vitesse du moteur Z et non sur sa position.
 const float DEFAULT_KI = 5; 
@@ -137,7 +118,7 @@ double Ki = DEFAULT_KI;
 double Kd = DEFAULT_KD;
 PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
 long z_target = 0;
-static long last_z_target = 0;
+ long last_z_target = 0;
 long z_reference = 0;
 const float PID_TO_STEPS = 10.0; //mm/V a ajuster
 bool pid_running = false;
@@ -159,7 +140,6 @@ uint16_t couleurOFF = TFT_RED;
 
 // Screen navigation
 
-int currentScreen = 0;
 int prevScreen = 0;
 const int NB_SCREENS = 6;
 int prevCLK; // Previous state of CLK
@@ -181,8 +161,6 @@ bool use_accelstepper_run = true;
 // Global variables for anti-dive method
 float fast_voltage = 0.0;              // Fast filtered voltage (corrected)
 float slow_voltage = 0.0;              // Slow filtered voltage (corrected)
-float uncorrected_fast = 0.0;          // Uncorrected fast voltage
-float uncorrected_slow = 0.0;          // Uncorrected slow voltage
 bool anti_dive_active = false;         // Anti-dive state
 unsigned long anti_dive_start_time = 0;// Anti-dive start time
 
@@ -198,17 +176,14 @@ int position_history_index = 0;
 unsigned long last_position_record_time = 0;
 
 // EEPROM write delay
-static unsigned long last_eeprom_write = 0;
+ unsigned long last_eeprom_write = 0;
 const unsigned long EEPROM_WRITE_INTERVAL = 1000;
-
-// Temporary variable for voltage correction factor adjustment
-float temp_voltage_correction_factor = DEFAULT_CORRECTION_FACTOR;
 
 // === OVERSAMPLING NON-BLOQUANT pour PID ultra-stable ===
 #define OVERSAMPLE_TARGET 10  // 10 samples ~10ms @1kHz
-static float oversample_sum = 0.0;
-static uint8_t oversample_count = 0;
-static float last_pid_input = 0.0;  // Dernière moyenne pour low-pass
+ float oversample_sum = 0.0;
+ uint8_t oversample_count = 0;
+ float last_pid_input = 0.0;  // Dernière moyenne pour low-pass
 const float INPUT_ALPHA = 0.7;      // Low-pass fort sur moyenne
 
 // Function declarations
@@ -242,970 +217,8 @@ float simulation_offset = 2.0;          // Offset DC pour tester tracking
 #include <lvgl.h>
 #include <TFT_eSPI.h>
 
-// Configuration écran
-#define SCREEN_WIDTH 480
-#define SCREEN_HEIGHT 320
-#define LVGL_BUFFER_SIZE (SCREEN_WIDTH * 40)
 
-// Objets LVGL globaux
-static lv_disp_draw_buf_t draw_buf;
-static lv_color_t buf1[LVGL_BUFFER_SIZE];
-static lv_disp_drv_t disp_drv;
-static lv_indev_drv_t indev_drv;
 
-// Objets UI (équivalents de vos écrans)
-lv_obj_t *screen_monitoring;
-lv_obj_t *screen_setpoint;
-lv_obj_t *screen_correction;
-lv_obj_t *screen_kp;
-lv_obj_t *screen_ki;
-lv_obj_t *screen_steps;
-
-// Labels dynamiques (pour mise à jour temps réel)
-lv_obj_t *label_voltage_fast;
-lv_obj_t *label_voltage_slow;
-lv_obj_t *label_setpoint;
-lv_obj_t *label_position;
-lv_obj_t *label_thc_state;
-lv_obj_t *label_enable_state;
-lv_obj_t *label_antidive_state;
-lv_obj_t *label_arc_state;
-
-// Objets pour les écrans d'ajustement
-lv_obj_t *label_setpoint_val;
-lv_obj_t *label_correction_val;
-lv_obj_t *label_kp_val;
-lv_obj_t *label_ki_val;
-lv_obj_t *label_steps_val;
-
-
-lv_obj_t *screen_settings;
-lv_obj_t *label_param_name;
-lv_obj_t *label_param_value;
-int selected_param = 0;  // 0=Setpoint, 1=Correction, 2=Kp, 3=Ki, 4=Steps
-
-const char* param_names[] = {
-    "Setpoint (V)",
-    "Correction",
-    "Kp",
-    "Ki",
-    "Steps/mm"
-};
-
-void btn_change_param_event(lv_event_t *e);
-void btn_adjust_multi_event(lv_event_t *e);
-void update_param_value_display();
-void create_screen_settings();
-
-// ========================================
-// PARTIE 2 : CALLBACKS LVGL (Driver Display + Tactile)
-// ========================================
-
-// Fonction appelée par LVGL pour dessiner
-void my_disp_flush(lv_disp_drv_t *disp, const lv_area_t *area, lv_color_t *color_p) {
-    uint32_t w = (area->x2 - area->x1 + 1);
-    uint32_t h = (area->y2 - area->y1 + 1);
-
-    // Protection SPI avec timeout plus long pour display
-    if (xSemaphoreTake(spiMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        tft.startWrite();
-        tft.setAddrWindow(area->x1, area->y1, w, h);
-        tft.pushColors((uint16_t *)&color_p->full, w * h, true);
-        tft.endWrite();
-        xSemaphoreGive(spiMutex);
-    } else {
-        Serial.println("⚠️ SPI timeout dans flush!");
-    }
-
-    lv_disp_flush_ready(disp);
-}
-
-// Fonction pour lire le tactile
-void lv_touchpad_read(lv_indev_drv_t * indev, lv_indev_data_t * data) {
-    // Protection SPI
-    if (xSemaphoreTake(spiMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-        
-        if (ts.touched()) {
-            TS_Point p = ts.getPoint();
-
-            data->state = LV_INDEV_STATE_PR;
-
-            // ✅ MAPPING CORRIGÉ (utiliser vos valeurs de calibration)
-            // Remplacez 360, 3900, 340, 3800 par vos valeurs réelles
-            data->point.x = map(p.x, 3900, 360, 0, SCREEN_WIDTH);
-            data->point.y = map(p.y, 3800, 340, 0, SCREEN_HEIGHT);
-
-            // Clamp sécurité
-            data->point.x = constrain(data->point.x, 0, SCREEN_WIDTH - 1);
-            data->point.y = constrain(data->point.y, 0, SCREEN_HEIGHT - 1);
-
-            // ✅ DEBUG IMPORTANT : Afficher les touches
-            static unsigned long lastDebug = 0;
-            if (millis() - lastDebug > 500) {
-                Serial.printf("📱 Touch: RAW(%d,%d) -> Screen(%d,%d)\n", 
-                             p.x, p.y, data->point.x, data->point.y);
-                lastDebug = millis();
-            }
-
-        } else {
-            data->state = LV_INDEV_STATE_REL;
-        }
-        
-        xSemaphoreGive(spiMutex);
-        
-    } else {
-        // Si timeout SPI, relâcher le touch
-        data->state = LV_INDEV_STATE_REL;
-    }
-}
-
-void my_touchpad_read(lv_indev_drv_t *indev_driver, lv_indev_data_t *data) {
-    uint16_t touchX, touchY;
-    bool touched = tft.getTouch(&touchX, &touchY);
-
-}
-
-// ========================================
-// PARTIE 3 : CALLBACKS BOUTONS
-// ========================================
-
-// Callback pour boutons +/-
-void btn_adjust_event_handler(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    
-    // Feedback visuel sur PRESSED
-    if (code == LV_EVENT_PRESSED) {
-        lv_obj_t *btn = lv_event_get_target(e);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_70, LV_STATE_PRESSED);
-        Serial.println("🔘 Bouton pressé!");
-    }
-    
-    if (code == LV_EVENT_CLICKED) {
-        int direction = (int)(intptr_t)lv_event_get_user_data(e);
-        
-        Serial.printf("✅ Ajustement: %+d sur écran %d\n", direction, currentScreen);
-        
-        // ===== LOGIQUE D'AJUSTEMENT INTÉGRÉE =====
-        float increment = 0.0;
-        char buf[32];
-        
-        switch(currentScreen) {
-            case 0: // Monitoring - lecture seule
-                Serial.println("Monitoring screen - no adjustment");
-                break;
-                
-            case 1: // Setpoint
-                increment = 1.0;
-                Setpoint += direction * increment;
-                Setpoint = constrain(Setpoint, 80.0, 200.0);
-                EEPROM.put(EEPROM_SETPOINT_ADDR, (float)Setpoint);
-                
-                if (label_setpoint_val != NULL) {
-                    snprintf(buf, sizeof(buf), "%.1f", Setpoint);
-                    lv_label_set_text(label_setpoint_val, buf);
-                }
-                Serial.printf("Setpoint: %.1f V\n", Setpoint);
-                break;
-                
-            case 2: // Voltage correction factor
-                increment = 0.01;
-                voltage_correction_factor += direction * increment;
-                voltage_correction_factor = constrain(voltage_correction_factor, 0.5, 2.0);
-                EEPROM.put(EEPROM_CORRECTION_FACTOR_ADDR, (float)voltage_correction_factor);
-                
-                if (label_correction_val != NULL) {
-                    snprintf(buf, sizeof(buf), "%.2f", voltage_correction_factor);
-                    lv_label_set_text(label_correction_val, buf);
-                }
-                Serial.printf("Correction: %.2f\n", voltage_correction_factor);
-                break;
-              
-            case 3: // Kp
-                increment = 0.5;
-                    Serial.printf("\n🔍 === CASE 3 (Kp) ===\n");
-                Serial.printf("   Kp AVANT tout: %.10f\n", Kp);  // 10 décimales
-                Serial.printf("   &Kp = %p\n", &Kp);
-                Kp += direction * increment;
-                Kp = constrain(Kp, 0.0, 10.0);
-                myPID.SetTunings(Kp, Ki, Kd);
-                EEPROM.put(EEPROM_KP_ADDR, (float)Kp);
-                
-                if (label_kp_val != NULL) {
-                    snprintf(buf, sizeof(buf), "%.1f", Kp);
-                    lv_label_set_text(label_kp_val, buf);
-                }
-                Serial.printf("Kp: %.1f\n", Kp);
-                break;
-                
-            case 4: // Ki
-                increment = 0.1;
-                Ki += direction * increment;
-                Ki = constrain(Ki, 0.0, 10.0);
-                myPID.SetTunings(Kp, Ki, Kd);
-                EEPROM.put(EEPROM_KI_ADDR, (float)Ki);
-                
-                if (label_ki_val != NULL) {
-                    snprintf(buf, sizeof(buf), "%.1f", Ki);
-                    lv_label_set_text(label_ki_val, buf);
-                }
-                Serial.printf("Ki: %.1f\n", Ki);
-                break;
-
-            case 5: // Steps per mm
-                increment = 10.0;
-                STEPS_PER_MM_Z += direction * increment;
-                STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 200.0, 2000.0);
-                EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, (float)STEPS_PER_MM_Z);
-                
-                if (label_steps_val != NULL) {
-                    snprintf(buf, sizeof(buf), "%.0f", STEPS_PER_MM_Z);
-                    lv_label_set_text(label_steps_val, buf);
-                }
-                Serial.printf("Steps/mm: %.0f\n", STEPS_PER_MM_Z);
-                break;
-        }
-    }
-}
-
-void btn_nav_event_handler(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    
-    if (code == LV_EVENT_CLICKED) {
-        // Récupérer l'ID
-        int target_screen_id = (int)(intptr_t)lv_event_get_user_data(e);
-        
-        Serial.printf("🔍 Navigation demandée vers ID: %d\n", target_screen_id);
-        
-        // ✅ LOGS DE DEBUG CRITIQUES
-        Serial.printf("   screen_monitoring = %p\n", screen_monitoring);
-        Serial.printf("   screen_setpoint = %p\n", screen_setpoint);
-        Serial.printf("   screen_correction = %p\n", screen_correction);
-        Serial.printf("   screen_kp = %p\n", screen_kp);
-        Serial.printf("   screen_ki = %p\n", screen_ki);
-        Serial.printf("   screen_steps = %p\n", screen_steps);
-        
-        lv_obj_t *target_screen = NULL;
-        
-        // Convertir l'ID en pointeur
-        switch(target_screen_id) {
-            case 0: 
-                target_screen = screen_monitoring;
-                break;
-            case 1: 
-                target_screen = screen_setpoint;
-                break;
-            case 2: 
-                target_screen = screen_correction;
-                break;
-            case 3: 
-                target_screen = screen_kp;
-                break;
-            case 4: 
-                target_screen = screen_ki;
-                break;
-            case 5: 
-                target_screen = screen_steps;
-                break;
-            case 6: target_screen = screen_settings; break;
-        }
-        
-        // ✅ VÉRIFICATION CRITIQUE AVANT lv_scr_load_anim
-        if (target_screen == NULL) {
-            Serial.printf("❌ ERREUR FATALE: target_screen est NULL pour ID %d!\n", target_screen_id);
-            Serial.println("   Les écrans ont été corrompus ou non créés correctement.");
-            return;
-        }
-        
-        // ✅ VÉRIFIER QUE L'OBJET LVGL EST VALIDE
-        if (!lv_obj_is_valid(target_screen)) {
-            Serial.printf("❌ ERREUR: target_screen %p n'est PAS un objet LVGL valide!\n", target_screen);
-            return;
-        }
-        
-        Serial.println("   ✅ Tous les checks OK, lancement animation...");
-        
-        // Sauvegarder EEPROM
-        EEPROM.commit();
-        Serial.println("💾 EEPROM sauvegardée");
-        
-        // Mise à jour currentScreen
-        currentScreen = target_screen_id;
-        
-        Serial.printf("🔄 Navigation vers écran %d (%p)\n", target_screen_id, target_screen);
-        
-        // ✅ APPEL SÉCURISÉ
-        lv_scr_load_anim(target_screen, LV_SCR_LOAD_ANIM_FADE_ON, 200, 0, false);
-        
-        Serial.println("✅ Animation lancée avec succès!");
-    }
-}
-
-void create_screen_monitoring() {
-    // SÉCURITÉ : Si l'écran existe déjà, on ne le recrée pas
-    // if (screen_monitoring != NULL) {
-    //     Serial.println("⚠️ Monitoring déjà créé, on ignore.");
-    //     return; 
-    // }
-
-    screen_monitoring = lv_obj_create(NULL);
-    
-    // === HEADER ===
-    lv_obj_t *header = lv_obj_create(screen_monitoring);
-    lv_obj_set_size(header, 480, 40);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x2C3E50), 0);
-    
-    lv_obj_t *label_title = lv_label_create(header);
-    lv_label_set_text(label_title, "THC - MONITORING");
-    lv_obj_set_style_text_color(label_title, lv_color_hex(0xF1C40F), 0);
-    lv_obj_center(label_title);
-
-    // === PANEL PRINCIPAL ===
-    lv_obj_t *panel = lv_obj_create(screen_monitoring);
-    lv_obj_set_size(panel, 460, 200);
-    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 50);
-    lv_obj_set_style_bg_color(panel, lv_color_white(), 0);
-
-    // Voltage Fast (Cyan)
-    lv_obj_t *label = lv_label_create(panel);
-    lv_label_set_text(label, "Voltage Fast:");
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 10, 10);
-    
-    label_voltage_fast = lv_label_create(panel);
-    lv_label_set_text(label_voltage_fast, "0.0 V");
-    lv_obj_set_style_text_color(label_voltage_fast, lv_color_hex(0xFF0000), 0);
-    lv_obj_align(label_voltage_fast, LV_ALIGN_TOP_RIGHT, -10, 10);
-
-    // Voltage Slow
-    label = lv_label_create(panel);
-    lv_label_set_text(label, "Voltage Slow:");
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 10, 35);
-    
-    label_voltage_slow = lv_label_create(panel);
-    lv_label_set_text(label_voltage_slow, "0.0 V");
-    lv_obj_set_style_text_color(label_voltage_slow, lv_color_hex(0xFF0000), 0);
-    lv_obj_align(label_voltage_slow, LV_ALIGN_TOP_RIGHT, -10, 35);
-
-    // Setpoint (Vert)
-    label = lv_label_create(panel);
-    lv_label_set_text(label, "Setpoint:");
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 10, 60);
-    
-    label_setpoint = lv_label_create(panel);
-    lv_label_set_text(label_setpoint, "110.0 V");
-    lv_obj_set_style_text_color(label_setpoint, lv_color_hex(0xFF0000), 0);
-    lv_obj_align(label_setpoint, LV_ALIGN_TOP_RIGHT, -10, 60);
-
-    // Position
-    label = lv_label_create(panel);
-    lv_label_set_text(label, "Position:");
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 10, 85);
-    
-    label_position = lv_label_create(panel);
-    lv_label_set_text(label_position, "0 steps");
-    lv_obj_set_style_text_color(label_position, lv_color_hex(0xFF0000), 0);
-    lv_obj_align(label_position, LV_ALIGN_TOP_RIGHT, -10, 85);
-
-    // === STATUTS (avec LED colorées) ===
-    int y_status = 110;
-    
-    // THC State
-    label = lv_label_create(panel);
-    lv_label_set_text(label, "THC State:");
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 10, y_status);
-    
-    label_thc_state = lv_label_create(panel);
-    lv_label_set_text(label_thc_state, LV_SYMBOL_STOP " INACTIF");
-    lv_obj_set_style_text_color(label_thc_state, lv_color_hex(0xFF0000), 0);
-    lv_obj_align(label_thc_state, LV_ALIGN_TOP_RIGHT, -10, y_status);
-
-    // Enable
-    label = lv_label_create(panel);
-    lv_label_set_text(label, "Enable:");
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 10, y_status + 25);
-    
-    label_enable_state = lv_label_create(panel);
-    lv_label_set_text(label_enable_state, LV_SYMBOL_STOP " INACTIF");
-    lv_obj_align(label_enable_state, LV_ALIGN_TOP_RIGHT, -10, y_status + 25);
-
-    // Anti-Dive
-    label = lv_label_create(panel);
-    lv_label_set_text(label, "Anti-Dive:");
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 10, y_status + 50);
-    
-    label_antidive_state = lv_label_create(panel);
-    lv_label_set_text(label_antidive_state, LV_SYMBOL_STOP " INACTIF");
-    lv_obj_align(label_antidive_state, LV_ALIGN_TOP_RIGHT, -10, y_status + 50);
-
-    // Arc Voltage
-    label = lv_label_create(panel);
-    lv_label_set_text(label, "Arc Voltage:");
-    lv_obj_align(label, LV_ALIGN_TOP_LEFT, 10, y_status + 75);
-    
-    label_arc_state = lv_label_create(panel);
-    lv_label_set_text(label_arc_state, LV_SYMBOL_CLOSE " NOK");
-    lv_obj_set_style_text_color(label_arc_state, lv_color_hex(0xFF0000), 0);
-    lv_obj_align(label_arc_state, LV_ALIGN_TOP_RIGHT, -10, y_status + 75);
-
-    // === BOUTONS NAVIGATION ===
-    lv_obj_t *btn_next = lv_btn_create(screen_monitoring);
-    lv_obj_set_size(btn_next, 150, 50);
-    lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)1);
-    
-    label = lv_label_create(btn_next);
-    lv_label_set_text(label, LV_SYMBOL_RIGHT " Suivant");
-    lv_obj_center(label);
-}
-
-// Callback pour changer de paramètre
-void btn_change_param_event(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    
-    if (code == LV_EVENT_CLICKED) {
-        int direction = (int)(intptr_t)lv_event_get_user_data(e);
-        
-        selected_param += direction;
-        
-        // Boucler entre 0 et 4
-        if (selected_param < 0) selected_param = 4;
-        if (selected_param > 4) selected_param = 0;
-        
-        // Mettre à jour l'affichage
-        lv_label_set_text(label_param_name, param_names[selected_param]);
-        update_param_value_display();
-        
-        Serial.printf("Paramètre sélectionné: %s\n", param_names[selected_param]);
-    }
-}
-
-// Callback pour ajuster la valeur
-void btn_adjust_multi_event(lv_event_t *e) {
-    lv_event_code_t code = lv_event_get_code(e);
-    
-    if (code == LV_EVENT_CLICKED) {
-        int direction = (int)(intptr_t)lv_event_get_user_data(e);
-        char buf[32];
-        
-        switch(selected_param) {
-            case 0: // Setpoint
-                Setpoint += direction * 1.0;
-                Setpoint = constrain(Setpoint, 80.0, 200.0);
-                EEPROM.put(EEPROM_SETPOINT_ADDR, (float)Setpoint);
-                snprintf(buf, sizeof(buf), "%.1f", Setpoint);
-                break;
-                
-            case 1: // Correction
-                voltage_correction_factor += direction * 0.01;
-                voltage_correction_factor = constrain(voltage_correction_factor, 0.5, 2.0);
-                EEPROM.put(EEPROM_CORRECTION_FACTOR_ADDR, (float)voltage_correction_factor);
-                snprintf(buf, sizeof(buf), "%.2f", voltage_correction_factor);
-                break;
-                
-            case 2: // Kp
-                Kp += direction * 0.5;
-                Kp = constrain(Kp, 0.0, 10.0);
-                myPID.SetTunings(Kp, Ki, Kd);
-                EEPROM.put(EEPROM_KP_ADDR, (float)Kp);
-                snprintf(buf, sizeof(buf), "%.1f", Kp);
-                break;
-                
-            case 3: // Ki
-                Ki += direction * 0.1;
-                Ki = constrain(Ki, 0.0, 10.0);
-                myPID.SetTunings(Kp, Ki, Kd);
-                EEPROM.put(EEPROM_KI_ADDR, (float)Ki);
-                snprintf(buf, sizeof(buf), "%.1f", Ki);
-                break;
-                
-            case 4: // Steps
-                STEPS_PER_MM_Z += direction * 10.0;
-                STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 200.0, 2000.0);
-                EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, (float)STEPS_PER_MM_Z);
-                snprintf(buf, sizeof(buf), "%.0f", STEPS_PER_MM_Z);
-                break;
-        }
-        
-        lv_label_set_text(label_param_value, buf);
-    }
-}
-
-void update_param_value_display() {
-    char buf[32];
-    
-    switch(selected_param) {
-        case 0: snprintf(buf, sizeof(buf), "%.1f", Setpoint); break;
-        case 1: snprintf(buf, sizeof(buf), "%.2f", voltage_correction_factor); break;
-        case 2: snprintf(buf, sizeof(buf), "%.1f", Kp); break;
-        case 3: snprintf(buf, sizeof(buf), "%.1f", Ki); break;
-        case 4: snprintf(buf, sizeof(buf), "%.0f", STEPS_PER_MM_Z); break;
-    }
-    
-    lv_label_set_text(label_param_value, buf);
-}
-
-void create_screen_setpoint() {
-    screen_setpoint = lv_obj_create(NULL);
-    
-    // Header
-    lv_obj_t *header = lv_obj_create(screen_setpoint);
-    lv_obj_set_size(header, 480, 40);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x2C3E50), 0);
-    
-    lv_obj_t *label = lv_label_create(header);
-    lv_label_set_text(label, "AJUSTER CONSIGNE");
-    lv_obj_set_style_text_color(label, lv_color_hex(0xF1C40F), 0);
-    lv_obj_center(label);
-
-    // Affichage valeur
-    label = lv_label_create(screen_setpoint);
-    lv_label_set_text(label, "Consigne (V):");
-    lv_obj_align(label, LV_ALIGN_CENTER, -60, -50);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
-    
-    label_setpoint_val = lv_label_create(screen_setpoint);
-    lv_label_set_text(label_setpoint_val, "110.0");
-    lv_obj_align(label_setpoint_val, LV_ALIGN_CENTER, -60, 0);
-    lv_obj_set_style_text_font(label_setpoint_val, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(label_setpoint_val, lv_color_hex(0xFF2F2F), 0);
-
-    // Bouton +
-    lv_obj_t *btn_up = lv_btn_create(screen_setpoint);
-    lv_obj_set_size(btn_up, 120, 60);
-    lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -20, -40);
-    lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
-    lv_obj_add_event_cb(btn_up, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)1);
-    
-    label = lv_label_create(btn_up);
-    lv_label_set_text(label, LV_SYMBOL_PLUS);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-
-    // Bouton -
-    lv_obj_t *btn_down = lv_btn_create(screen_setpoint);
-    lv_obj_set_size(btn_down, 120, 60);
-    lv_obj_align(btn_down, LV_ALIGN_RIGHT_MID, -20, 40);
-    lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
-    lv_obj_add_event_cb(btn_down, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
-    
-    label = lv_label_create(btn_down);
-    lv_label_set_text(label, LV_SYMBOL_MINUS);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-
-    // Boutons navigation
-    lv_obj_t *btn_prev = lv_btn_create(screen_setpoint);
-    lv_obj_set_size(btn_prev, 140, 50);
-    lv_obj_align(btn_prev, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-    lv_obj_add_event_cb(btn_prev, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
-    
-    label = lv_label_create(btn_prev);
-    lv_label_set_text(label, LV_SYMBOL_LEFT " Retour");
-    lv_obj_center(label);
-
-    lv_obj_t *btn_home = lv_btn_create(screen_setpoint);
-    lv_obj_set_size(btn_home, 140, 50);
-    lv_obj_align(btn_home, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
-    
-    label = lv_label_create(btn_home);
-    lv_label_set_text(label, LV_SYMBOL_HOME " Home");
-    lv_obj_center(label);
-    
-    lv_obj_t *btn_next = lv_btn_create(screen_setpoint);
-    lv_obj_set_size(btn_next, 140, 50);
-    lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)2);
-    
-    label = lv_label_create(btn_next);
-    lv_label_set_text(label, "Suivant " LV_SYMBOL_RIGHT);
-    lv_obj_center(label);
-}
-
-void create_screen_correction() {
-    screen_correction = lv_obj_create(NULL);
-    
-    // Header
-    lv_obj_t *header = lv_obj_create(screen_correction);
-    lv_obj_set_size(header, 480, 40);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x2C3E50), 0);
-    
-    lv_obj_t *label = lv_label_create(header);
-    lv_label_set_text(label, "CORRECTION VOLTAGE");
-    lv_obj_set_style_text_color(label, lv_color_hex(0xF1C40F), 0);
-    lv_obj_center(label);
-
-    // Affichage valeur
-    label = lv_label_create(screen_correction);
-    lv_label_set_text(label, "Facteur:");
-    lv_obj_align(label, LV_ALIGN_CENTER, 0, -50);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
-    
-    label_correction_val = lv_label_create(screen_correction);
-    lv_label_set_text(label_correction_val, "1.00");
-    lv_obj_align(label_correction_val, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_text_font(label_correction_val, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(label_correction_val, lv_color_hex(0xFFAA00), 0);
-
-    // Boutons +/-
-    lv_obj_t *btn_up = lv_btn_create(screen_correction);
-    lv_obj_set_size(btn_up, 120, 70);
-    lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -20, -70);
-    lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
-    lv_obj_add_event_cb(btn_up, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)1);
-    
-    label = lv_label_create(btn_up);
-    lv_label_set_text(label, LV_SYMBOL_PLUS);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-
-    lv_obj_t *btn_down = lv_btn_create(screen_correction);
-    lv_obj_set_size(btn_down, 120, 70);
-    lv_obj_align(btn_down, LV_ALIGN_RIGHT_MID, -20, 70);
-    lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
-    lv_obj_add_event_cb(btn_down, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
-    label = lv_label_create(btn_down);
-    lv_label_set_text(label, LV_SYMBOL_MINUS);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-
-    // Navigation
-    lv_obj_t *btn_prev = lv_btn_create(screen_correction);
-    lv_obj_set_size(btn_prev, 140, 50);
-    lv_obj_align(btn_prev, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-    lv_obj_add_event_cb(btn_prev, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)1);
-    
-    label = lv_label_create(btn_prev);
-    lv_label_set_text(label, LV_SYMBOL_LEFT " Retour");
-    lv_obj_center(label);
-
-    lv_obj_t *btn_home = lv_btn_create(screen_correction);
-    lv_obj_set_size(btn_home, 140, 50);
-    lv_obj_align(btn_home, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
-    
-    label = lv_label_create(btn_home);
-    lv_label_set_text(label, LV_SYMBOL_HOME " Home");
-    lv_obj_center(label);
-    
-    lv_obj_t *btn_next = lv_btn_create(screen_correction);
-    lv_obj_set_size(btn_next, 140, 50);
-    lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)3);
-    
-    label = lv_label_create(btn_next);
-    lv_label_set_text(label, "Suivant " LV_SYMBOL_RIGHT);
-    lv_obj_center(label);
-}
-
-void create_screen_kp() {
-    screen_kp = lv_obj_create(NULL);
-    
-    lv_obj_t *header = lv_obj_create(screen_kp);
-    lv_obj_set_size(header, 480, 40);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x2C3E50), 0);
-    
-    lv_obj_t *label = lv_label_create(header);
-    lv_label_set_text(label, "REGLAGE Kp");
-    lv_obj_set_style_text_color(label, lv_color_hex(0xF1C40F), 0);
-    lv_obj_center(label);
-
-    label = lv_label_create(screen_kp);
-    lv_label_set_text(label, "Kp:");
-    lv_obj_align(label, LV_ALIGN_CENTER, 0, -50);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
-    
-    label_kp_val = lv_label_create(screen_kp);
-    lv_label_set_text(label_kp_val, "2.0");
-    lv_obj_align(label_kp_val, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_text_font(label_kp_val, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(label_kp_val, lv_color_hex(0xFF5555), 0);
-
-    lv_obj_t *btn_up = lv_btn_create(screen_kp);
-    lv_obj_set_size(btn_up, 120, 70);
-    lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -20, -70);
-    lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
-    lv_obj_add_event_cb(btn_up, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)1);
-    
-    label = lv_label_create(btn_up);
-    lv_label_set_text(label, LV_SYMBOL_PLUS);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-
-    lv_obj_t *btn_down = lv_btn_create(screen_kp);
-    lv_obj_set_size(btn_down, 120, 70);
-    lv_obj_align(btn_down, LV_ALIGN_RIGHT_MID, -20, 70);
-    lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
-    lv_obj_add_event_cb(btn_down, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
-    
-    label = lv_label_create(btn_down);
-    lv_label_set_text(label, LV_SYMBOL_MINUS);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-
-    lv_obj_t *btn_prev = lv_btn_create(screen_kp);
-    lv_obj_set_size(btn_prev, 140, 50);
-    lv_obj_align(btn_prev, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-    lv_obj_add_event_cb(btn_prev, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)2);
-    
-    label = lv_label_create(btn_prev);
-    lv_label_set_text(label, LV_SYMBOL_LEFT " Retour");
-    lv_obj_center(label);
-
-    lv_obj_t *btn_home = lv_btn_create(screen_kp);
-    lv_obj_set_size(btn_home, 140, 50);
-    lv_obj_align(btn_home, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
-    
-    label = lv_label_create(btn_home);
-    lv_label_set_text(label, LV_SYMBOL_HOME " Home");
-    lv_obj_center(label);
-    
-    lv_obj_t *btn_next = lv_btn_create(screen_kp);
-    lv_obj_set_size(btn_next, 140, 50);
-    lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)4);
-    
-    label = lv_label_create(btn_next);
-    lv_label_set_text(label, "Suivant " LV_SYMBOL_RIGHT);
-    lv_obj_center(label);
-}
-
-void create_screen_ki() {
-    screen_ki = lv_obj_create(NULL);
-    
-    lv_obj_t *header = lv_obj_create(screen_ki);
-    lv_obj_set_size(header, 480, 40);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x2C3E50), 0);
-    
-    lv_obj_t *label = lv_label_create(header);
-    lv_label_set_text(label, "REGLAGE Ki");
-    lv_obj_set_style_text_color(label, lv_color_hex(0xF1C40F), 0);
-    lv_obj_center(label);
-
-    label = lv_label_create(screen_ki);
-    lv_label_set_text(label, "Ki:");
-    lv_obj_align(label, LV_ALIGN_CENTER, 0, -50);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
-    
-    label_ki_val = lv_label_create(screen_ki);
-    lv_label_set_text(label_ki_val, "5.0");
-    lv_obj_align(label_ki_val, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_text_font(label_ki_val, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(label_ki_val, lv_color_hex(0xFF5555), 0);
-
-    lv_obj_t *btn_up = lv_btn_create(screen_ki);
-    lv_obj_set_size(btn_up, 120, 70);
-    lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -20, -70);
-    lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
-    lv_obj_add_event_cb(btn_up, btn_adjust_event_handler, LV_EVENT_CLICKED,(void*)(intptr_t)1);
-    
-    label = lv_label_create(btn_up);
-    lv_label_set_text(label, LV_SYMBOL_PLUS);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-
-    lv_obj_t *btn_down = lv_btn_create(screen_ki);
-    lv_obj_set_size(btn_down, 120, 70);
-    lv_obj_align(btn_down, LV_ALIGN_RIGHT_MID, -20, 70);
-    lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
-    lv_obj_add_event_cb(btn_down, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
-    
-    label = lv_label_create(btn_down);
-    lv_label_set_text(label, LV_SYMBOL_MINUS);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-
-    lv_obj_t *btn_prev = lv_btn_create(screen_ki);
-    lv_obj_set_size(btn_prev, 140, 50);
-    lv_obj_align(btn_prev, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-    lv_obj_add_event_cb(btn_prev, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)3);
-    
-    label = lv_label_create(btn_prev);
-    lv_label_set_text(label, LV_SYMBOL_LEFT " Retour");
-    lv_obj_center(label);
-
-    lv_obj_t *btn_home = lv_btn_create(screen_ki);
-    lv_obj_set_size(btn_home, 140, 50);
-    lv_obj_align(btn_home, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
-    
-    label = lv_label_create(btn_home);
-    lv_label_set_text(label, LV_SYMBOL_HOME " Home");
-    lv_obj_center(label);
-    
-    lv_obj_t *btn_next = lv_btn_create(screen_ki);
-    lv_obj_set_size(btn_next, 140, 50);
-    lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)5);
-    
-    label = lv_label_create(btn_next);
-    lv_label_set_text(label, "Suivant " LV_SYMBOL_RIGHT);
-    lv_obj_center(label);
-}
-
-void create_screen_steps() {
-    screen_steps = lv_obj_create(NULL);
-    
-    lv_obj_t *header = lv_obj_create(screen_steps);
-    lv_obj_set_size(header, 480, 40);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x2C3E50), 0);
-    
-    lv_obj_t *label = lv_label_create(header);
-    lv_label_set_text(label, "STEPS/MM");
-    lv_obj_set_style_text_color(label, lv_color_hex(0xF1C40F), 0);
-    lv_obj_center(label);
-
-    label = lv_label_create(screen_steps);
-    lv_label_set_text(label, "Steps/mm:");
-    lv_obj_align(label, LV_ALIGN_CENTER, 0, -50);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_24, 0);
-    
-    label_steps_val = lv_label_create(screen_steps);
-    lv_label_set_text(label_steps_val, "400");
-    lv_obj_align(label_steps_val, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_text_font(label_steps_val, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(label_steps_val, lv_color_hex(0xFF5555), 0);
-
-    lv_obj_t *btn_up = lv_btn_create(screen_steps);
-    lv_obj_set_size(btn_up, 120, 70);
-    lv_obj_align(btn_up, LV_ALIGN_RIGHT_MID, -20, -70);
-    lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
-    lv_obj_add_event_cb(btn_up, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)1);
-    
-    label = lv_label_create(btn_up);
-    lv_label_set_text(label, LV_SYMBOL_PLUS);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-
-    lv_obj_t *btn_down = lv_btn_create(screen_steps);
-    lv_obj_set_size(btn_down, 120, 70);
-    lv_obj_align(btn_down, LV_ALIGN_RIGHT_MID, -20, 70);
-    lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
-    lv_obj_add_event_cb(btn_down, btn_adjust_event_handler, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
-    
-    label = lv_label_create(btn_down);
-    lv_label_set_text(label, LV_SYMBOL_MINUS);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-
-    lv_obj_t *btn_prev = lv_btn_create(screen_steps);
-    lv_obj_set_size(btn_prev, 140, 50);
-    lv_obj_align(btn_prev, LV_ALIGN_BOTTOM_LEFT, 10, -10);
-    lv_obj_add_event_cb(btn_prev, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)4);
-    
-    label = lv_label_create(btn_prev);
-    lv_label_set_text(label, LV_SYMBOL_LEFT " Retour");
-    lv_obj_center(label);
-
-    lv_obj_t *btn_home = lv_btn_create(screen_steps);
-    lv_obj_set_size(btn_home, 140, 50);
-    lv_obj_align(btn_home, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
-    
-    label = lv_label_create(btn_home);
-    lv_label_set_text(label, LV_SYMBOL_HOME " Home");
-    lv_obj_center(label);
-    
-    lv_obj_t *btn_next = lv_btn_create(screen_steps);
-    lv_obj_set_size(btn_next, 140, 50);
-    lv_obj_align(btn_next, LV_ALIGN_BOTTOM_RIGHT, -10, -10);
-    lv_obj_add_event_cb(btn_next, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)6);
-    
-    label = lv_label_create(btn_next);
-    lv_label_set_text(label, LV_SYMBOL_HOME " Retour");
-    lv_obj_center(label);
-}
-
-
-void create_screen_settings() {
-    screen_settings = lv_obj_create(NULL);
-    
-    // === HEADER ===
-    lv_obj_t *header = lv_obj_create(screen_settings);
-    lv_obj_set_size(header, 480, 40);
-    lv_obj_align(header, LV_ALIGN_TOP_MID, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0x2C3E50), 0);
-    
-    lv_obj_t *label = lv_label_create(header);
-    lv_label_set_text(label, "REGLAGES RAPIDES");
-    lv_obj_set_style_text_color(label, lv_color_hex(0xF1C40F), 0);
-    lv_obj_center(label);
-    
-    // === NOM DU PARAMÈTRE ===
-    label_param_name = lv_label_create(screen_settings);
-    lv_label_set_text(label_param_name, param_names[0]);
-    lv_obj_align(label_param_name, LV_ALIGN_TOP_MID, 0, 60);
-    lv_obj_set_style_text_font(label_param_name, &lv_font_montserrat_24, 0);
-    
-    // === VALEUR DU PARAMÈTRE ===
-    label_param_value = lv_label_create(screen_settings);
-    lv_label_set_text(label_param_value, "110.0");
-    lv_obj_align(label_param_value, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_set_style_text_font(label_param_value, &lv_font_montserrat_48, 0);
-    lv_obj_set_style_text_color(label_param_value, lv_color_hex(0x00FFFF), 0);
-    
-    // === BOUTONS SÉLECTION PARAMÈTRE (◀ ▶) ===
-    lv_obj_t *btn_prev_param = lv_btn_create(screen_settings);
-    lv_obj_set_size(btn_prev_param, 80, 60);
-    lv_obj_align(btn_prev_param, LV_ALIGN_LEFT_MID, 20, 0);
-    lv_obj_set_style_bg_color(btn_prev_param, lv_color_hex(0x3498DB), 0);
-    lv_obj_add_event_cb(btn_prev_param, btn_change_param_event, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
-    
-    label = lv_label_create(btn_prev_param);
-    lv_label_set_text(label, LV_SYMBOL_LEFT);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-    
-    lv_obj_t *btn_next_param = lv_btn_create(screen_settings);
-    lv_obj_set_size(btn_next_param, 80, 60);
-    lv_obj_align(btn_next_param, LV_ALIGN_RIGHT_MID, -20, 0);
-    lv_obj_set_style_bg_color(btn_next_param, lv_color_hex(0x3498DB), 0);
-    lv_obj_add_event_cb(btn_next_param, btn_change_param_event, LV_EVENT_CLICKED, (void*)(intptr_t)1);
-    
-    label = lv_label_create(btn_next_param);
-    lv_label_set_text(label, LV_SYMBOL_RIGHT);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-    
-    // === BOUTONS +/- VALEUR ===
-    lv_obj_t *btn_up = lv_btn_create(screen_settings);
-    lv_obj_set_size(btn_up, 100, 60);
-    lv_obj_align(btn_up, LV_ALIGN_BOTTOM_RIGHT, -20, -80);
-    lv_obj_set_style_bg_color(btn_up, lv_color_hex(0x27AE60), 0);
-    lv_obj_add_event_cb(btn_up, btn_adjust_multi_event, LV_EVENT_CLICKED, (void*)(intptr_t)1);
-    
-    label = lv_label_create(btn_up);
-    lv_label_set_text(label, LV_SYMBOL_PLUS);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-    
-    lv_obj_t *btn_down = lv_btn_create(screen_settings);
-    lv_obj_set_size(btn_down, 100, 60);
-    lv_obj_align(btn_down, LV_ALIGN_BOTTOM_LEFT, 20, -80);
-    lv_obj_set_style_bg_color(btn_down, lv_color_hex(0xE74C3C), 0);
-    lv_obj_add_event_cb(btn_down, btn_adjust_multi_event, LV_EVENT_CLICKED, (void*)(intptr_t)-1);
-    
-    label = lv_label_create(btn_down);
-    lv_label_set_text(label, LV_SYMBOL_MINUS);
-    lv_obj_set_style_text_font(label, &lv_font_montserrat_32, 0);
-    lv_obj_center(label);
-    
-    // === BOUTON HOME ===
-    lv_obj_t *btn_home = lv_btn_create(screen_settings);
-    lv_obj_set_size(btn_home, 140, 50);
-    lv_obj_align(btn_home, LV_ALIGN_BOTTOM_MID, 0, -10);
-    lv_obj_add_event_cb(btn_home, btn_nav_event_handler, LV_EVENT_CLICKED, (void*)0);
-    
-    label = lv_label_create(btn_home);
-    lv_label_set_text(label, LV_SYMBOL_HOME " Home");
-    lv_obj_center(label);
-}
 
 
 
@@ -1215,200 +228,6 @@ void taskLvglTick(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(1));   // ⬅️ tick à 1 kHz
     }
 }
-
-void lvgl_setup() {
-    Serial.println("Initialisation LVGL...");
-    lv_init();
-    
-    // Buffer display
-    lv_disp_draw_buf_init(&draw_buf, buf1, NULL, LVGL_BUFFER_SIZE);
-
-    // Driver display
-    lv_disp_drv_init(&disp_drv);
-    disp_drv.hor_res = SCREEN_WIDTH;
-    disp_drv.ver_res = SCREEN_HEIGHT;
-    disp_drv.flush_cb = my_disp_flush;
-    disp_drv.draw_buf = &draw_buf;
-    lv_disp_t *disp = lv_disp_drv_register(&disp_drv);
-    
-    if (disp != NULL) {
-        Serial.println("   ✅ Display driver enregistré");
-    } else {
-        Serial.println("   ❌ ERREUR Display driver");
-    }
-
-    // ========================================
-    // SECTION TACTILE AVEC DIAGNOSTIC COMPLET
-    // ========================================
- lv_indev_drv_init(&indev_drv);
-    indev_drv.type = LV_INDEV_TYPE_POINTER;
-    indev_drv.read_cb = lv_touchpad_read;
-    
-    // DIAGNOSTIC : Vérifier avant enregistrement
-    Serial.printf("   Driver tactile avant enregistrement:\n");
-    Serial.printf("   - Type: %d (devrait être %d)\n", indev_drv.type, LV_INDEV_TYPE_POINTER);
-    Serial.printf("   - Callback: %p\n", indev_drv.read_cb);
-    
-    lv_indev_t *touch_indev = lv_indev_drv_register(&indev_drv);
-    
-    if (touch_indev != NULL) {
-        Serial.println("   ✅ Touch driver enregistré");
-        
-        // DIAGNOSTIC : Vérifier après enregistrement
-        Serial.printf("   - Pointeur indev: %p\n", touch_indev);
-        Serial.printf("   - Type après enregistrement: %d\n", touch_indev->driver->type);
-        Serial.printf("   - Callback après enregistrement: %p\n", touch_indev->driver->read_cb);
-        
-        // TEST FORCÉ : Appeler manuellement le callback
-        Serial.println("   🧪 Test manuel du callback tactile...");
-        lv_indev_data_t test_data;
-        lv_touchpad_read(touch_indev->driver, &test_data);
-        Serial.printf("   État retourné: %d\n", test_data.state);
-    }else {
-        Serial.println("   ❌ ERREUR: Touch driver NON enregistré!");
-    }
-
-// ✅ CRÉER TOUS LES ÉCRANS
-    Serial.println("📄 Création des écrans..."); 
-    create_screen_monitoring();
-    Serial.printf("   ✅ Monitoring créé: %p\n", screen_monitoring);
-    create_screen_setpoint();
-    Serial.printf("   ✅ Setpoint créé: %p\n", screen_setpoint);
-    create_screen_correction();
-    Serial.printf("   ✅ Correction créé: %p\n", screen_correction);
-    create_screen_kp();
-    Serial.printf("   ✅ Kp créé: %p\n", screen_kp);
-    create_screen_ki();
-    Serial.printf("   ✅ Ki créé: %p\n", screen_ki);
-    create_screen_steps();
-    Serial.printf("   ✅ Steps créé: %p\n", screen_steps);
-    create_screen_settings();
-    Serial.printf("   ✅ Settings créé: %p\n", screen_settings);
-        // ✅ VÉRIFICATION CRITIQUE
-    if (screen_monitoring == NULL || screen_setpoint == NULL) {
-        Serial.println("❌ ERREUR FATALE: Écrans non créés!");
-        while(1) { delay(1000); } // Bloquer pour debug
-    }
-    // Charger l'écran principal
-    lv_scr_load(screen_monitoring);
-    Serial.println("LVGL initialisé avec succès");
-    // ✅ DIAGNOSTIC FINAL
-    vTaskDelay(pdMS_TO_TICKS(500));
-    //diagnose_lvgl_touch();
-}
-
-
-// ========================================
-// PARTIE 7 : MISE À JOUR DES VALEURS
-// ========================================
-void update_lvgl_labels_safe(DisplayData* data) {
-    static char buf[32];
-    
-
-    // === VOLTAGE FAST ===
-    snprintf(buf, sizeof(buf), "%.1f V", data->fast_voltage);
-    lv_label_set_text(label_voltage_fast, buf);
-    lv_obj_invalidate(label_voltage_fast);
-   
-    
-    // === VOLTAGE SLOW ===
-    snprintf(buf, sizeof(buf), "%.1f V", data->slow_voltage);
-    lv_label_set_text(label_voltage_slow, buf);
-    lv_obj_invalidate(label_voltage_slow);
-    
-    // === SETPOINT ===
-    snprintf(buf, sizeof(buf), "%.1f V", data->setpoint);
-    lv_label_set_text(label_setpoint, buf);
-    lv_obj_invalidate(label_setpoint);
-    
-    // === POSITION ===
-    snprintf(buf, sizeof(buf), "%ld steps", data->position);
-    lv_label_set_text(label_position, buf);
-    lv_obj_invalidate(label_position);
-    
-    // === THC STATE ===
-    if (data->thc_active) {
-        lv_label_set_text(label_thc_state, LV_SYMBOL_PLAY " ACTIF");
-        lv_obj_set_style_text_color(label_thc_state, lv_color_hex(0x00FF00), 0);
-    } else {
-        lv_label_set_text(label_thc_state, LV_SYMBOL_STOP " INACTIF");
-        lv_obj_set_style_text_color(label_thc_state, lv_color_hex(0xFF0000), 0);
-    }
-    lv_obj_invalidate(label_thc_state);
-    
-    // === ENABLE STATE ===
-    if (data->enable_active) {
-        lv_label_set_text(label_enable_state, LV_SYMBOL_OK " ACTIF");
-        lv_obj_set_style_text_color(label_enable_state, lv_color_hex(0x00FF00), 0);
-    } else {
-        lv_label_set_text(label_enable_state, LV_SYMBOL_CLOSE " INACTIF");
-        lv_obj_set_style_text_color(label_enable_state, lv_color_hex(0xFF0000), 0);
-    }
-    lv_obj_invalidate(label_enable_state);
-    
-    // === ANTI-DIVE STATE ===
-    if (data->anti_dive_active) {
-        lv_label_set_text(label_antidive_state, LV_SYMBOL_WARNING " ACTIF");
-        lv_obj_set_style_text_color(label_antidive_state, lv_color_hex(0xFFAA00), 0);
-    } else {
-        lv_label_set_text(label_antidive_state, LV_SYMBOL_OK " INACTIF");
-        lv_obj_set_style_text_color(label_antidive_state, lv_color_hex(0x00FF00), 0);
-    }
-    lv_obj_invalidate(label_antidive_state);
-    
-    // === ARC VOLTAGE STATE ===
-    if (data->arc_ok) {
-        lv_label_set_text(label_arc_state, LV_SYMBOL_OK " OK");
-        lv_obj_set_style_text_color(label_arc_state, lv_color_hex(0x00FF00), 0);
-    } else {
-        lv_label_set_text(label_arc_state, LV_SYMBOL_CLOSE " NOK");
-        lv_obj_set_style_text_color(label_arc_state, lv_color_hex(0xFF0000), 0);
-    }
-    lv_obj_invalidate(label_arc_state);
-
-
-}
-
-void update_all_screen_values() {
-    char buf[32];
-    
-    // Écran Monitoring
-    if (label_setpoint != NULL) {
-        snprintf(buf, sizeof(buf), "%.1f V", Setpoint);
-        lv_label_set_text(label_setpoint, buf);
-    }
-    
-    // Écran Setpoint
-    if (label_setpoint_val != NULL) {
-        snprintf(buf, sizeof(buf), "%.1f", Setpoint);
-        lv_label_set_text(label_setpoint_val, buf);
-    }
-    
-    // Écran Correction
-    if (label_correction_val != NULL) {
-        snprintf(buf, sizeof(buf), "%.2f", voltage_correction_factor);
-        lv_label_set_text(label_correction_val, buf);
-    }
-    
-    // Écran Kp
-    if (label_kp_val != NULL) {
-        snprintf(buf, sizeof(buf), "%.1f", Kp);
-        lv_label_set_text(label_kp_val, buf);
-    }
-    
-    // Écran Ki
-    if (label_ki_val != NULL) {
-        snprintf(buf, sizeof(buf), "%.1f", Ki);
-        lv_label_set_text(label_ki_val, buf);
-    }
-    
-    // Écran Steps
-    if (label_steps_val != NULL) {
-        snprintf(buf, sizeof(buf), "%.0f", STEPS_PER_MM_Z);
-        lv_label_set_text(label_steps_val, buf);
-    }
-}
-
 
 void taskUI(void *pvParameters) {
     Serial.println("📱 Task UI démarrée sur Core 1");
@@ -1540,7 +359,7 @@ void setup() {
 
   // Validation des valeurs (inchangé)
   if (isnan(Setpoint) || Setpoint < 80 || Setpoint > 200) Setpoint = DEFAULT_SETPOINT;
-  if (isnan(voltage_correction_factor) || voltage_correction_factor < 0.5 || voltage_correction_factor > 2.0) voltage_correction_factor = DEFAULT_CORRECTION_FACTOR;
+  //if (isnan(voltage_correction_factor) || voltage_correction_factor < 0.5 || voltage_correction_factor > 2.0) voltage_correction_factor = DEFAULT_CORRECTION_FACTOR;
   if (isnan(STEPS_PER_MM_Z) || STEPS_PER_MM_Z < 200 || STEPS_PER_MM_Z > 2000) STEPS_PER_MM_Z = DEFAULT_STEP_PER_MM;
   //if (isnan(Kp) || Kp < 0.0 || Kp > 10) Kp = DEFAULT_KP;
   if (isnan(Ki) || Ki < 0.0 || Ki > 10) Ki = DEFAULT_KI;
@@ -1614,7 +433,7 @@ void initializeEEPROM() {
         // Initialize EEPROM with default values
         Serial.println("Initialisation EEPROM en cours..."); 
         EEPROM.put(EEPROM_SETPOINT_ADDR, DEFAULT_SETPOINT);
-        EEPROM.put(EEPROM_CORRECTION_FACTOR_ADDR, DEFAULT_CORRECTION_FACTOR);
+        //EEPROM.put(EEPROM_CORRECTION_FACTOR_ADDR, DEFAULT_CORRECTION_FACTOR);
         EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, DEFAULT_STEP_PER_MM);
         EEPROM.put(EEPROM_KP_ADDR, DEFAULT_KP); // Écrit la valeur non nulle (p. ex. 100.0)
         EEPROM.put(EEPROM_KI_ADDR, DEFAULT_KI);
@@ -1661,11 +480,11 @@ void initializeEEPROM() {
     // ========================================
     // VARIABLES STATIQUES (déclarées UNE SEULE FOIS)
     // ========================================
-    static unsigned long lastTouchCheck = 0;
-    static bool was_touched = false;
-    static int last_x = 0, last_y = 0;
+     unsigned long lastTouchCheck = 0;
+     bool was_touched = false;
+     int last_x = 0, last_y = 0;
 
-    static unsigned long lastDataUpdate = 0;
+     unsigned long lastDataUpdate = 0;
     if (millis() - lastDataUpdate >= 100) {
         if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
             display_data.fast_voltage = fast_voltage;
@@ -1683,9 +502,9 @@ void initializeEEPROM() {
     }
     
     // Variables pour calibration (à activer/désactiver)
-    static bool CALIBRATION_MODE = false;  // ✅ Mettre à false après calibration
-    static int touch_count = 0;
-    static int corners[4][2] = {{0,0}, {0,0}, {0,0}, {0,0}};
+     bool CALIBRATION_MODE = false;  // ✅ Mettre à false après calibration
+     int touch_count = 0;
+     int corners[4][2] = {{0,0}, {0,0}, {0,0}, {0,0}};
     
     unsigned long loopStartTime = micros();
     unsigned long currentTime = millis();
@@ -1711,7 +530,7 @@ void initializeEEPROM() {
             String command = Serial.readStringUntil('\n');
             if (command == "RESET_EEPROM") {
                 EEPROM.put(EEPROM_SETPOINT_ADDR, DEFAULT_SETPOINT);
-                EEPROM.put(EEPROM_CORRECTION_FACTOR_ADDR, DEFAULT_CORRECTION_FACTOR);
+                //EEPROM.put(EEPROM_CORRECTION_FACTOR_ADDR, DEFAULT_CORRECTION_FACTOR);
                 EEPROM.put(EEPROM_KP_ADDR, DEFAULT_KP);
                 EEPROM.put(EEPROM_KI_ADDR, DEFAULT_KI);
                 EEPROM.put(EEPROM_KD_ADDR, DEFAULT_KD);
@@ -1738,14 +557,14 @@ void initializeEEPROM() {
         }
         
         // Lecture ADC (50ms)
-        static unsigned long lastAdcTask = 0;
+         unsigned long lastAdcTask = 0;
         if (millis() - lastAdcTask >= 50) {
             readAndFilterVoltage();
             lastAdcTask = millis();
         }
 
         // Contrôle THC (5ms)
-        static unsigned long lastControlTask = 0;
+         unsigned long lastControlTask = 0;
         if (micros() - lastControlTask >= 5000) {
             managePlasmaAndTHC();
             lastControlTask = micros();
@@ -1833,8 +652,8 @@ void readAndFilterVoltage() {
         return;  // Skip lecture ADC réelle
     }
     // === WARM-UP ADC (1s) ===
-    static unsigned long start_time = 0;
-    static bool warmed_up = false;
+     unsigned long start_time = 0;
+     bool warmed_up = false;
     if (start_time == 0) start_time = millis();
     if (millis() - start_time >= 1000) warmed_up = true;
 
@@ -1862,15 +681,14 @@ void readAndFilterVoltage() {
     //    V_plasma = V_divided / PLASMA_VOLTAGE_DIVIDER_RATIO
     float raw = V_divided / PLASMA_VOLTAGE_DIVIDER_RATIO;
     
-    // === FAST : Oversample 10x + Low-pass (PID input) ===
+    // === FAST : Echantillonnage 10x + Low-pass (PID input) ===
     oversample_sum += raw;
     oversample_count++;
     if (oversample_count >= OVERSAMPLE_TARGET) {
         float avg_raw = oversample_sum / OVERSAMPLE_TARGET;
         const float INPUT_ALPHA = 0.7f;
-        uncorrected_fast = INPUT_ALPHA * avg_raw + (1.0f - INPUT_ALPHA) * last_pid_input;
-        last_pid_input = uncorrected_fast;
-        fast_voltage = uncorrected_fast * voltage_correction_factor;
+        fast_voltage = INPUT_ALPHA * avg_raw + (1.0f - INPUT_ALPHA) * last_pid_input;
+        last_pid_input = fast_voltage;
         
         noInterrupts();  // Protection ESP32
         Input = fast_voltage;
@@ -1883,35 +701,35 @@ void readAndFilterVoltage() {
 
     // === SLOW : Moyenne 200 + Low-pass (anti-dive ref) ===
     const int N_SLOW = 200;
-    static float slow_samples[N_SLOW];
-    static int slow_idx = 0;
-    static float slow_sum = 0.0f;
-    static bool slow_init = false;
-    static float slow_lp = 0.0f;
+     float slow_samples[N_SLOW];
+     int slow_idx = 0;
+     float slow_sum = 0.0f;
+     bool slow_init = false;
+     
     const float ALPHA_SLOW = 0.8f;
 
-    if (!slow_init) {
+    if (!slow_init) {  // Initialisation du tableau de N_SLOW avec la valeur de raw au dédut pour ne pas commencer a 0
         for (int i = 0; i < N_SLOW; i++) slow_samples[i] = raw;
-        slow_sum = raw * N_SLOW;
+        slow_sum = raw * N_SLOW; 
         slow_init = true;
     }
-    slow_sum -= slow_samples[slow_idx];
-    slow_samples[slow_idx] = raw;
-    slow_sum += raw;
-    slow_idx = (slow_idx + 1) % N_SLOW;
+    slow_sum -= slow_samples[slow_idx]; // supresssion de la plus ancienne valeur dans la somme
+    slow_samples[slow_idx] = raw; // ajout de la nouvelle valeur dans le tableau
+    slow_sum += raw; // Ajout de la nouvelle valeur dans la somme
+    slow_idx = (slow_idx + 1) % N_SLOW; // décalage de l'index circulaire
 
-    float slow_raw_avg = slow_sum / N_SLOW;
-    uncorrected_slow = slow_raw_avg;
-    slow_voltage = ALPHA_SLOW * (slow_raw_avg * voltage_correction_factor) + 
+    float slow_raw_avg = slow_sum / N_SLOW; // calcul de la moyenne glissante
+    // Application d'un filtre low-pass sur la moyenne
+    slow_voltage = ALPHA_SLOW * slow_raw_avg  + 
                   (1.0f - ALPHA_SLOW) * slow_lp;
     slow_lp = slow_voltage;
 
     // === ANTI-DIVE : SÉCURISÉ → UNIQUEMENT si THC ACTIVE ! ===
-    static float voltage_at_activation = 0.0f;
+     float voltage_at_activation = 0.0f;
     const float DROP_THRESHOLD = 5.0f;
     const float RETURN_THRESHOLD = 3.0f;
     const unsigned long MAX_ANTI_DIVE_DURATION = 1000;
-    static bool last_anti_dive_state = false;
+     bool last_anti_dive_state = false;
 
     // Activation désactivation de l'Anti_Div
     if (warmed_up && 
@@ -1940,7 +758,7 @@ void managePlasmaAndTHC() {
   bool thc_off       = (digitalRead(THC_OFF_PIN) == HIGH);
   unsigned long currentTime = millis();
 
-  static bool last_thc_active = false;
+   bool last_thc_active = false;
 
   if (thc_active && !last_thc_active) {
       z_reference = stepper.currentPosition();
@@ -2014,209 +832,3 @@ void managePlasmaAndTHC() {
 
     }
 } 
-
-// void updateTFT() {
-//     // La logique d'effacement de l'écran ou de la zone de mise à jour va ici.
-  
-// if(currentScreen+1!=1){// Les bouton + et - ne sont pas disponible sur la page principale
-//     // 1. Bouton AUGMENTER (UP - Ajustement Setpoint)
-//     tft.fillRect(UP_BUTTON_X_MIN, UP_BUTTON_Y_MIN, 
-//                  UP_BUTTON_X_MAX - UP_BUTTON_X_MIN, 
-//                  UP_BUTTON_Y_MAX - UP_BUTTON_Y_MIN, 
-//                  TFT_DARKGREEN); 
-    
-//     tft.setTextSize(3);
-//     tft.setTextColor(TFT_WHITE);
-//     // Dessin du symbole 'plus' ou d'une flèche vers le haut
-//     tft.setCursor(UP_BUTTON_X_MIN + 60, UP_BUTTON_Y_MIN + 20);
-//     tft.println("+"); // Ou un caractère flèche '▲'
-    
-//     // 2. Bouton DIMINUER (DOWN - Ajustement Setpoint)
-//     tft.fillRect(DOWN_BUTTON_X_MIN, DOWN_BUTTON_Y_MIN, 
-//                  DOWN_BUTTON_X_MAX - DOWN_BUTTON_X_MIN, 
-//                  DOWN_BUTTON_Y_MAX - DOWN_BUTTON_Y_MIN, 
-//                  TFT_DARKRED); 
-                 
-//     tft.setTextColor(TFT_WHITE);
-//     // Dessin du symbole 'moins'
-//     tft.setCursor(DOWN_BUTTON_X_MIN + 60, DOWN_BUTTON_Y_MIN + 20);
-//     tft.println("-"); // Ou un caractère flèche '▼'
-//     tft.setTextSize(1);
-//     }
-    
-//         //---Bouton page suivante
-//     int MENU_LARGUEUR=MENU_BUTTON_X_MAX-MENU_BUTTON_X_MIN;
-//     int MENU_HAUTEUR=MENU_BUTTON_Y_MAX-MENU_BUTTON_Y_MIN;           
-//     tft.fillRect(MENU_BUTTON_X_MIN, MENU_BUTTON_Y_MIN,MENU_LARGUEUR ,MENU_HAUTEUR, TFT_DARKGREY);
-//     tft.setTextFont(2);
-//     tft.setTextColor(TFT_YELLOW, TFT_DARKGREY);
-//     tft.drawCentreString("Suivant", 40, 290, 2);
-
-//             //---Bouton page précédent
-//     int PRECED_LARGUEUR=PRECED_BUTTON_X_MAX-PRECED_BUTTON_X_MIN;
-//     int PRECED_HAUTEUR=PRECED_BUTTON_Y_MAX-PRECED_BUTTON_Y_MIN;           
-//     tft.fillRect(PRECED_BUTTON_X_MIN, PRECED_BUTTON_Y_MIN,PRECED_LARGUEUR ,PRECED_HAUTEUR, TFT_DARKGREY);
-//     tft.setTextFont(2);
-//     tft.setTextColor(TFT_YELLOW, TFT_DARKGREY);
-//     tft.drawCentreString("Precedent", 80, 290, 2);
-
-//            //---Bouton HOME
-//     int HOME_LARGUEUR=HOME_BUTTON_X_MAX-HOME_BUTTON_X_MIN;
-//     int HOME_HAUTEUR=HOME_BUTTON_Y_MAX-HOME_BUTTON_Y_MIN;           
-//     tft.fillRect(HOME_BUTTON_X_MIN, HOME_BUTTON_Y_MIN,HOME_LARGUEUR ,HOME_HAUTEUR, TFT_DARKGREY);
-//     tft.setTextFont(2);
-//     tft.setTextColor(TFT_YELLOW, TFT_DARKGREY);
-//     tft.drawCentreString("Home", 230 , 290 , 2);
-    
-// }
-
-// void updateDisplay() {
-//     static int last_currentScreen = -1;
-//     if (currentScreen != last_currentScreen) {
-//       EEPROM.commit();
-//         tft.fillScreen(TFT_BLACK);
-//         last_currentScreen = currentScreen;
-//     tft.setTextFont(2);
-//     // --- HEADER (largeur 480) ---
-//     tft.fillRect(0, 0, 480, 28, TFT_DARKGREY);
-//     tft.setTextColor(TFT_YELLOW, TFT_DARKGREY);
-//     tft.setCursor(6, 6);
-//     tft.printf("THC | Screen %d/%d", currentScreen + 1, NB_SCREENS);
-//     updateTFT();
-//     }
-//     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-//     tft.setTextFont(2);
-//     tft.setTextSize(1);
-//     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-//     switch (currentScreen) {
-
-//         case 0: // ---- SCREEN 1 ----
-            
-//             tft.drawString("STATUS : MONITORING", 10, 40, 2);
-
-//             tft.drawString("Voltage:", 10, 70, 2);
-//             tft.setTextColor(TFT_CYAN, TFT_BLACK);
-//             tft.drawFloat(fast_voltage, 1, 220, 70, 2);
-//             tft.drawFloat(slow_voltage, 1, 250, 70, 2);
-
-//             tft.setTextColor(TFT_WHITE, TFT_BLACK);
-//             tft.drawString("Setpoint:", 10, 90, 2);
-//             tft.setTextColor(TFT_GREEN, TFT_BLACK);
-//             tft.drawFloat(Setpoint, 1, 220, 90, 2);
-
-//             tft.setTextColor(TFT_WHITE, TFT_BLACK);
-//             tft.drawString("position :", 10, 110, 2);
-//             tft.setTextColor(TFT_GREEN, TFT_BLACK);
-//             tft.drawFloat(stepper.currentPosition(), 1, 220, 110, 2);
-
-//             tft.setTextColor(TFT_WHITE, TFT_BLACK);
-//             tft.drawString("THC State:", 10, 130, 2);
-//             tft.setTextColor(thc_active ? TFT_GREEN : TFT_RED, TFT_BLACK);
-//             tft.drawString(thc_active ? "ACTIF  ":"INACTIF", 220, 130, 2);
-
-//             tft.setTextColor(TFT_WHITE, TFT_BLACK);
-//             tft.drawString("Enable:", 10, 150, 2);
-//             tft.setTextColor(digitalRead(ENABLE_PIN) ? TFT_RED : TFT_GREEN, TFT_BLACK);
-//             tft.drawString(digitalRead(ENABLE_PIN)? "INACTIF":"ACTIF    ", 220, 150, 2);
-
-//             tft.setTextColor(TFT_WHITE, TFT_BLACK);
-//             tft.drawString("ANTI DIV:", 10, 170, 2);
-//             tft.setTextColor(digitalRead(anti_dive_active) ? TFT_GREEN : TFT_RED, TFT_BLACK);
-//             tft.drawString(digitalRead(anti_dive_active) ? "INACTIF":"ACTIF  ", 220, 170, 2);
-
-//             tft.setTextColor(TFT_WHITE, TFT_BLACK);
-//             tft.drawString("Tension:", 10, 190, 2);
-//             tft.setTextColor(arc_voltage_ok ? TFT_GREEN : TFT_RED, TFT_BLACK);
-//             tft.drawString(arc_voltage_ok ? "OK ":"NOK", 220, 190, 2);
-//             break;
-
-//         case 1: // ---- SCREEN 2 ----
-               
-//             tft.drawString("ADJ. Consigne", 10, 40, 4);
-//             tft.drawString("Consigne (V):", 10, 100, 4);
-//             tft.setTextColor(TFT_CYAN, TFT_BLACK);
-//             tft.drawFloat(Setpoint, 1, 260, 100, 4);
-//             break;
-
-//         case 2: // ---- SCREEN 2 ----
-//             tft.drawString("ADJ. CORRECTION FACTOR", 10, 40, 4);
-//             tft.drawString("Current Factor:", 10, 100, 4);
-//             tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-//             tft.drawFloat(temp_voltage_correction_factor, 2, 260, 100, 4);
-
-//             tft.setTextColor(TFT_RED, TFT_BLACK);
-//             tft.drawString("Saves on exit!", 10, 170, 2);
-//             break;
-
-//         case 3:
-//             tft.drawString("ADJ. PID Kp", 10, 40, 4);
-//             tft.drawString("Kp:", 10, 100, 4);
-//             tft.setTextColor(TFT_RED, TFT_BLACK);
-//             tft.drawFloat(Kp, 1, 260, 100, 4);
-//             break;
-
-//         case 4:
-//             tft.drawString("ADJ. PID Ki", 10, 40, 4);
-//             tft.drawString("Ki:", 10, 100, 4);
-//             tft.setTextColor(TFT_RED, TFT_BLACK);
-//             tft.drawFloat(Ki, 1, 260, 100, 4);
-//             break;        
-            
-//         case 5:
-//             tft.drawString("Adj Steps par mm Z", 10, 40, 4);
-//             tft.drawString("Steps/mm:", 10, 100, 4);
-//             tft.setTextColor(TFT_RED, TFT_BLACK);
-//             tft.drawFloat(STEPS_PER_MM_Z, 1, 260, 100, 4);
-//             break;
-
-
-//     }
-// }
-
-// void handleTouchInput(uint16_t x, uint16_t y) {
-//     // Bouton UP
-//     if (x >= UP_BUTTON_X_MIN && x <= UP_BUTTON_X_MAX && 
-//         y >= UP_BUTTON_Y_MIN && y <= UP_BUTTON_Y_MAX) {
-//         adjustCurrentSetting(1);
-//         flashButton(UP_BUTTON_X_MIN, UP_BUTTON_Y_MIN, 
-//                    UP_BUTTON_X_MAX, UP_BUTTON_Y_MAX, TFT_GREEN);
-//         return;
-//     }
-
-//     // Bouton DOWN
-//     if (x >= DOWN_BUTTON_X_MIN && x <= DOWN_BUTTON_X_MAX && 
-//         y >= DOWN_BUTTON_Y_MIN && y <= DOWN_BUTTON_Y_MAX) {
-//         adjustCurrentSetting(-1);
-//         flashButton(DOWN_BUTTON_X_MIN, DOWN_BUTTON_Y_MIN, 
-//                    DOWN_BUTTON_X_MAX, DOWN_BUTTON_Y_MAX, TFT_RED);
-//         return;
-//     }
-
-//     // Bouton MENU (header)
-//     if (x >= MENU_BUTTON_X_MIN && x <= MENU_BUTTON_X_MAX && 
-//         y >= MENU_BUTTON_Y_MIN && y <= MENU_BUTTON_Y_MAX) {
-//         navigateScreen(1);
-//         flashButton(MENU_BUTTON_X_MIN, MENU_BUTTON_Y_MIN, 
-//                    MENU_BUTTON_X_MAX, MENU_BUTTON_Y_MAX, TFT_BLUE);
-//         return;
-//     }
-
-//         // Bouton Précédent
-//     if (x >= PRECED_BUTTON_X_MIN && x <= PRECED_BUTTON_X_MAX && 
-//         y >= PRECED_BUTTON_Y_MIN && y <= PRECED_BUTTON_Y_MAX) {
-//         navigateScreen(-1);
-//         flashButton(PRECED_BUTTON_X_MIN, PRECED_BUTTON_Y_MIN, 
-//                    PRECED_BUTTON_X_MAX, PRECED_BUTTON_Y_MAX, TFT_BLUE);
-
-//         return;
-//     }
-//                 // Bouton Home
-//     if (x >= HOME_BUTTON_X_MIN && x <= HOME_BUTTON_X_MAX && 
-//         y >= HOME_BUTTON_Y_MIN && y <= HOME_BUTTON_Y_MAX) {
-//         navigateScreen(0);
-//         flashButton(HOME_BUTTON_X_MIN, HOME_BUTTON_Y_MIN, 
-//                    HOME_BUTTON_X_MAX, HOME_BUTTON_Y_MAX, TFT_BLUE);
-
-//         return;
-//     }
-// }
