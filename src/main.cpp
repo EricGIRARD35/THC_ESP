@@ -9,6 +9,7 @@
 #include <XPT2046_Touchscreen.h>
 #include <SPI.h>
 #include "ui_screens.h"
+#include "screen_graph.h"
 
 
 // --- THC pour ESP32 ---
@@ -87,7 +88,7 @@ void  lv_scr_load();
 
 // Parametres par défaut
 const float DEFAULT_SETPOINT = 110.0; //Attention valeur de DEFAULT stocké sur 4 octets mais utilisé en double pour le PID
-float slow_lp = 0.0f;
+static float slow_lp = 0.0f;
 const float DEFAULT_STEP_PER_MM = 400;
 const float DEFAULT_KP = 2; // attention l'action proportionnel agit dans ce cas comme une action intégrale en agissant sur la vitesse du moteur Z et non sur sa position.
 const float DEFAULT_KI = 5; 
@@ -493,6 +494,7 @@ void initializeEEPROM() {
             display_data.fast_voltage = fast_voltage;
             display_data.slow_voltage = slow_voltage;
             display_data.setpoint = Setpoint;
+            display_data.output_pid = Output;
             display_data.position = stepper.currentPosition();
             display_data.thc_active = thc_active;
             display_data.enable_active = (digitalRead(ENABLE_PIN) == LOW);
@@ -503,17 +505,33 @@ void initializeEEPROM() {
         }
         lastDataUpdate = millis();
     }
+
+// ✅ AJOUTEZ : Mise à jour graphique (200ms)
+    static unsigned long lastGraphUpdate = 0;
+    if (currentScreen == 1 && millis() - lastGraphUpdate >= 200) {  // Screen 1 = graphique
+        if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+            update_graph_data(
+                display_data.fast_voltage,
+                display_data.setpoint,
+                display_data.output_pid
+            );
+            xSemaphoreGive(dataMutex);
+        }
+        lastGraphUpdate = millis();
+    }
     
-    // Variables pour calibration (à activer/désactiver)
-     bool CALIBRATION_MODE = false;  // ✅ Mettre à false après calibration
+    // ✅ AJOUTEZ : Tâche graphique (échelle auto)
+    if (currentScreen == 1) {
+        graph_update_task();
+    }
+
      int touch_count = 0;
      int corners[4][2] = {{0,0}, {0,0}, {0,0}, {0,0}};
     
     unsigned long loopStartTime = micros();
     unsigned long currentTime = millis();
     
-   
-    if (!CALIBRATION_MODE) {
+
         
         // Exécution moteur
         if (use_accelstepper_run) {
@@ -629,7 +647,6 @@ void initializeEEPROM() {
             loopCount = 0;
             lastLoopLogTime = currentTime;
         }
-    }
 }
 
 
@@ -692,7 +709,32 @@ void readAndFilterVoltage() {
         const float INPUT_ALPHA = 0.7f;
         fast_voltage = INPUT_ALPHA * avg_raw + (1.0f - INPUT_ALPHA) * last_pid_input;
         last_pid_input = fast_voltage;
+            
+        // === SLOW : Moyenne 200 + Low-pass (référence anti-dive) ===
+        const int N_SLOW = 200;
+        static float slow_samples[N_SLOW];
+        static int slow_idx = 0;
+        static float slow_sum = 0.0f;
+        static bool slow_init = false;
         
+        const float ALPHA_SLOW = 0.0005f;
+
+        if (!slow_init) {  // Initialisation du tableau de N_SLOW avec la valeur de raw au dédut pour ne pas commencer a 0
+            for (int i = 0; i < N_SLOW; i++) slow_samples[i] = raw;
+            slow_sum = raw * N_SLOW; 
+            slow_init = true;
+        }
+        slow_sum -= slow_samples[slow_idx]; // supresssion de la plus ancienne valeur dans la somme
+        slow_samples[slow_idx] = raw; // ajout de la nouvelle valeur dans le tableau
+        slow_sum += raw; // Ajout de la nouvelle valeur dans la somme
+        slow_idx = (slow_idx + 1) % N_SLOW; // décalage de l'index circulaire
+
+        float slow_raw_avg = slow_sum / N_SLOW; // calcul de la moyenne glissante
+        // Application d'un filtre low-pass sur la moyenne
+        slow_voltage = ALPHA_SLOW * slow_raw_avg  + 
+                    (1.0f - ALPHA_SLOW) * slow_lp;
+        slow_lp = slow_voltage;
+
         noInterrupts();  // Protection ESP32
         Input = fast_voltage;
         input_ready = true;  // Signal que Input est frais
@@ -702,30 +744,6 @@ void readAndFilterVoltage() {
         oversample_count = 0;
     }
 
-    // === SLOW : Moyenne 200 + Low-pass (anti-dive ref) ===
-    const int N_SLOW = 200;
-     float slow_samples[N_SLOW];
-     int slow_idx = 0;
-     float slow_sum = 0.0f;
-     bool slow_init = false;
-     
-    const float ALPHA_SLOW = 0.8f;
-
-    if (!slow_init) {  // Initialisation du tableau de N_SLOW avec la valeur de raw au dédut pour ne pas commencer a 0
-        for (int i = 0; i < N_SLOW; i++) slow_samples[i] = raw;
-        slow_sum = raw * N_SLOW; 
-        slow_init = true;
-    }
-    slow_sum -= slow_samples[slow_idx]; // supresssion de la plus ancienne valeur dans la somme
-    slow_samples[slow_idx] = raw; // ajout de la nouvelle valeur dans le tableau
-    slow_sum += raw; // Ajout de la nouvelle valeur dans la somme
-    slow_idx = (slow_idx + 1) % N_SLOW; // décalage de l'index circulaire
-
-    float slow_raw_avg = slow_sum / N_SLOW; // calcul de la moyenne glissante
-    // Application d'un filtre low-pass sur la moyenne
-    slow_voltage = ALPHA_SLOW * slow_raw_avg  + 
-                  (1.0f - ALPHA_SLOW) * slow_lp;
-    slow_lp = slow_voltage;
 
     // === ANTI-DIVE : SÉCURISÉ → UNIQUEMENT si THC ACTIVE ! ===
      float voltage_at_activation = 0.0f;

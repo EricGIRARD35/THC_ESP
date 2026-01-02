@@ -6,6 +6,7 @@
 #include <XPT2046_Touchscreen.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include "screen_graph.h"
 
 // ========================================
 // VARIABLES HARDWARE (extern - définies dans main.cpp)
@@ -72,7 +73,7 @@ extern lv_obj_t *label_steps_val;
 extern lv_obj_t *label_param_name;
 extern lv_obj_t *label_param_value;
 extern int selected_param;
-extern const char* param_names[5];
+extern const char* param_names[6];
 
 // Variable currentScreen
 extern int currentScreen;
@@ -106,6 +107,7 @@ struct DisplayData {
     float fast_voltage;
     float slow_voltage;
     float setpoint;
+    float output_pid;  
     long position;
     bool thc_active;
     bool enable_active;
