@@ -356,8 +356,6 @@ void setup() {
     // Initialisation LVGL (APRÈS TFT)
     lvgl_setup();
 
-    //update_all_screen_values();
-
   for (int i = 0; i < speed_filter_size; i++) {
     speed_readings[i] = 0.0;
   }
@@ -687,8 +685,8 @@ void readAndFilterVoltage() {
         return;  // Skip lecture ADC réelle
     }
     // === WARM-UP ADC (1s) ===
-     unsigned long start_time = 0;
-     bool warmed_up = false;
+     static unsigned long start_time = 0;
+     static bool warmed_up = false;
     if (start_time == 0) start_time = millis();
     if (millis() - start_time >= 1000) warmed_up = true;
 
@@ -740,8 +738,8 @@ void readAndFilterVoltage() {
             slow_init = true;
         }
         slow_sum -= slow_samples[slow_idx]; // supresssion de la plus ancienne valeur dans la somme
-        slow_samples[slow_idx] = raw; // ajout de la nouvelle valeur dans le tableau
-        slow_sum += raw; // Ajout de la nouvelle valeur dans la somme
+        slow_samples[slow_idx] = avg_raw; // ajout de la nouvelle valeur dans le tableau
+        slow_sum += avg_raw; // Ajout de la nouvelle valeur dans la somme
         slow_idx = (slow_idx + 1) % N_SLOW; // décalage de l'index circulaire
 
         float slow_raw_avg = slow_sum / N_SLOW; // calcul de la moyenne glissante
@@ -759,9 +757,6 @@ void readAndFilterVoltage() {
         oversample_count = 0;
     }
 
-
-
-
     // Activation désactivation de l'Anti_Div
     if (warmed_up && 
         abs(fast_voltage - slow_voltage)> DROP_THRESHOLD && 
@@ -778,7 +773,7 @@ void readAndFilterVoltage() {
         Serial.print(slow_voltage, 1);
         Serial.print("V | Saved: ");
         Serial.println(voltage_at_activation, 1);
-    } else if (anti_dive_active&&abs(Setpoint-slow_voltage) < RETURN_THRESHOLD) {
+    } else if (anti_dive_active&&abs(Setpoint-slow_voltage) < RETURN_THRESHOLD&&abs(fast_voltage-slow_voltage) < RETURN_THRESHOLD) {
           anti_dive_active=false;
         }
   }

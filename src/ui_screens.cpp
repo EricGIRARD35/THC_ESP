@@ -23,11 +23,11 @@ extern PID myPID;
 
 // Écrans
 lv_obj_t *screen_monitoring = NULL;
-lv_obj_t *screen_setpoint = NULL;
-lv_obj_t *screen_correction = NULL;
-lv_obj_t *screen_kp = NULL;
-lv_obj_t *screen_ki = NULL;
-lv_obj_t *screen_steps = NULL;
+// lv_obj_t *screen_setpoint = NULL;
+// lv_obj_t *screen_correction = NULL;
+// lv_obj_t *screen_kp = NULL;
+// lv_obj_t *screen_ki = NULL;
+// lv_obj_t *screen_steps = NULL;
 lv_obj_t *screen_settings = NULL;
 
 // Labels dynamiques - Monitoring
@@ -348,13 +348,6 @@ void btn_nav_event_handler(lv_event_t *e) {
         
         Serial.printf("🔍 Navigation demandée vers ID: %d\n", target_screen_id);
         
-        // ✅ LOGS DE DEBUG CRITIQUES
-        Serial.printf("   screen_monitoring = %p\n", screen_monitoring);
-        Serial.printf("   screen_Graph = %p\n", screen_setpoint);
-        Serial.printf("   screen_correction = %p\n", screen_correction);
-        Serial.printf("   screen_kp = %p\n", screen_kp);
-        Serial.printf("   screen_ki = %p\n", screen_ki);
-        Serial.printf("   screen_steps = %p\n", screen_steps);
         
         lv_obj_t *target_screen = NULL;
         
@@ -366,18 +359,7 @@ void btn_nav_event_handler(lv_event_t *e) {
             case 1: 
                 target_screen = screen_graph;
                 break;
-            // case 2: 
-            //     target_screen = screen_correction;
-            //     break;
-            // case 3: 
-            //     target_screen = screen_kp;
-            //     break;
-            // case 4: 
-            //     target_screen = screen_ki;
-            //     break;
-            // case 5: 
-            //     target_screen = screen_steps;
-            //     break;
+
             case 6: target_screen = screen_settings; break;
         }
         
