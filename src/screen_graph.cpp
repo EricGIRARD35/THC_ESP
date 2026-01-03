@@ -96,6 +96,8 @@ void create_screen_graph() {
     lv_chart_set_type(chart, LV_CHART_TYPE_LINE);
     lv_chart_set_point_count(chart, CHART_POINTS);
     lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 80, 160);  // 80-160V
+    lv_chart_set_range(chart, LV_CHART_AXIS_SECONDARY_Y, -500, 500); // -10 à 10mm
+    lv_chart_set_axis_tick(chart, LV_CHART_AXIS_SECONDARY_Y, 5, 2, 5, 2, true, 40);
     lv_chart_set_div_line_count(chart, 5, 10);  // Grille
     
     // Style
@@ -108,13 +110,12 @@ void create_screen_graph() {
     
     ser_input = lv_chart_add_series(chart, lv_color_hex(0x0000FF), LV_CHART_AXIS_PRIMARY_Y);      // Bleu
     ser_setpoint = lv_chart_add_series(chart, lv_color_hex(0x00FF00), LV_CHART_AXIS_PRIMARY_Y);   // Vert
-    ser_output = lv_chart_add_series(chart, lv_color_hex(0xFF0000), LV_CHART_AXIS_PRIMARY_Y);     // Rouge
+    ser_output = lv_chart_add_series(chart, lv_color_hex(0xFF0000), LV_CHART_AXIS_SECONDARY_Y);     // Rouge
     
     // Initialise à 120V (milieu)
     for (int i = 0; i < CHART_POINTS; i++) {
         ser_input->y_points[i] = 120;
         ser_setpoint->y_points[i] = 120;
-        ser_output->y_points[i] = 120;
     }
     
     lv_chart_refresh(chart);
@@ -159,7 +160,7 @@ void update_graph_data(float input, float setpoint, float output) {
     // Ajoute les points (shift automatique vers la gauche)
     lv_chart_set_next_value(chart, ser_input, (int32_t)input);
     lv_chart_set_next_value(chart, ser_setpoint, (int32_t)setpoint);
-    lv_chart_set_next_value(chart, ser_output, (int32_t)(output));
+    lv_chart_set_next_value(chart, ser_output, (int32_t)(output*100.0f)); // Conversion mm en centièmes pour plus de précision
     
         // Mise a jour des labels
     char buf[32];
@@ -187,28 +188,36 @@ void update_graph_data(float input, float setpoint, float output) {
 // ========================================
 
 static void update_chart_scale() {
-    if (chart == NULL || ser_input == NULL) return;
+    if (chart == NULL || ser_input == NULL || ser_output == NULL) return;
     
-    int32_t min_val = 9999;
-    int32_t max_val = -9999;
+    // --- ÉCHELLE PRIMAIRE (Tension : Input & Setpoint) ---
+    int32_t min_v = 9999, max_v = -9999;
+    
+    // --- ÉCHELLE SECONDAIRE (Mouvement : Output) ---
+    int32_t min_z = 9999, max_z = -9999;
     
     for (int i = 0; i < CHART_POINTS; i++) {
-        if (ser_input->y_points[i] < min_val) min_val = ser_input->y_points[i];
-        if (ser_input->y_points[i] > max_val) max_val = ser_input->y_points[i];
-        if (ser_setpoint->y_points[i] < min_val) min_val = ser_setpoint->y_points[i];
-        if (ser_setpoint->y_points[i] > max_val) max_val = ser_setpoint->y_points[i];
-        if (ser_output->y_points[i] < min_val) min_val = ser_output->y_points[i];
-        if (ser_output->y_points[i] > max_val) max_val = ser_output->y_points[i];
+        // Scan pour la Tension (Axe Gauche)
+        if (ser_input->y_points[i] < min_v) min_v = ser_input->y_points[i];
+        if (ser_input->y_points[i] > max_v) max_v = ser_input->y_points[i];
+        if (ser_setpoint->y_points[i] < min_v) min_v = ser_setpoint->y_points[i];
+        if (ser_setpoint->y_points[i] > max_v) max_v = ser_setpoint->y_points[i];
+
+        // Scan pour l'Output/Position (Axe Droit)
+int16_t val_z = (int16_t)ser_output->y_points[i]; 
+    if (val_z < min_z) min_z = val_z;
+    if (val_z > max_z) max_z = val_z;
     }
 
+    // --- Calcul et application Axe Primaire (Gauche) ---
+    int32_t range_v = max_v - min_v;
+    if (range_v < 10) range_v = 10;
+    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, min_v - (range_v/10), max_v + (range_v/10));
 
-    
-    int32_t range = max_val - min_val;
-    if (range < 10) range = 10;
-    min_val -= range / 10;
-    max_val += range / 10;
-    
-    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, min_val, max_val);
+    // --- Calcul et application Axe Secondaire (Droit) ---
+    int32_t range_z = max_z - min_z;
+    if (range_z < 20) range_z = 20; // Seuil mini pour ne pas trop zoomer sur le bruit
+    lv_chart_set_range(chart, LV_CHART_AXIS_SECONDARY_Y, min_z - (range_z/10), max_z + (range_z/10));
 }
 
 // ========================================

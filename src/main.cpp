@@ -229,8 +229,20 @@ float simulation_offset = 2.0;          // Offset DC pour tester tracking
 #include <TFT_eSPI.h>
 
 
+// Utilisation de IRAM_ATTR pour une exécution en nanosecondes
+void IRAM_ATTR handleCNCStep() {
+  // On ne laisse passer les pas de la CNC QUE si le THC n'est pas en train de piloter
+  // ou si l'Anti-Dive n'est pas bloquant.
+  if (!thc_active && !anti_dive_active) {
+    digitalWrite(STEPPER_STEP_PIN, digitalRead(CNC_Z_STEP_IN));
+  }
+}
 
-
+void IRAM_ATTR handleCNCDir() {
+  if (!thc_active && !anti_dive_active) {
+    digitalWrite(STEPPER_DIR_PIN, digitalRead(CNC_Z_DIR_IN));
+  }
+}
 
 
 void taskLvglTick(void *pvParameters) {
@@ -314,6 +326,8 @@ void setup() {
   // Sur ESP32, INPUT simple suffit souvent, mais INPUT_PULLUP peut stabiliser
   pinMode(CNC_Z_STEP_IN, INPUT);
   pinMode(CNC_Z_DIR_IN, INPUT);
+  attachInterrupt(digitalPinToInterrupt(CNC_Z_STEP_IN), handleCNCStep, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(CNC_Z_DIR_IN), handleCNCDir, CHANGE);
 
   // --- 3. I2C ---
   Wire.begin(ADS_I2C_SDA_PIN, ADS_I2C_SCL_PIN); // Démarre I2C sur SDA(17) et SCL(22)
@@ -847,14 +861,6 @@ void managePlasmaAndTHC() {
         use_accelstepper_run = false;
         z_target = 0;
         }
-        
-        
-        // 2. Copie directe vers les broches de sortie (Passthrough)
-        int stepState = digitalRead(CNC_Z_STEP_IN); 
-        int dirState = digitalRead(CNC_Z_DIR_IN); 
-        digitalWrite(STEPPER_STEP_PIN, stepState); 
-        digitalWrite(STEPPER_DIR_PIN, dirState);
-        
-
+              
     }
 } 
