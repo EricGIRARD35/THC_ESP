@@ -1,3 +1,4 @@
+
 #include <Arduino.h>
 #include <Wire.h>
 #include <AccelStepper.h>
@@ -10,6 +11,7 @@
 #include <SPI.h>
 #include "ui_screens.h"
 #include "screen_graph.h"
+
 
 
 // --- THC pour ESP32 ---
@@ -72,7 +74,7 @@ const float ADS_RESOLUTION_MAX = 32767.0;
 
 // Rapport de votre diviseur de tension (Exemple : si 40:1, alors 1/40 = 0.025)
 // C'est le coefficient K tel que V_plasma = V_mesurée / K
-float PLASMA_VOLTAGE_DIVIDER_RATIO = 61.6; // Vérifiez votre diviseur réel !
+float PLASMA_VOLTAGE_DIVIDER_RATIO = 76.4; // Vérifiez votre diviseur réel !
 
 // Variables pour la lecture tactile non-bloquante
 unsigned long lastTouchTime = 0;
@@ -117,10 +119,9 @@ double smoothedOutput = 0.0;
 double Kp = DEFAULT_KP;
 double Ki = DEFAULT_KI;
 double Kd = DEFAULT_KD;
-PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, DIRECT);
+PID myPID(&Input, &Output, &Setpoint, Kp, Ki, Kd, REVERSE); // reverse pour que l'action du PID soit inverse de l'erreur
 long z_target = 0;
  long last_z_target = 0;
-long z_reference = 0;
 const float PID_TO_STEPS = 10.0; //mm/V a ajuster
 bool pid_running = false;
 volatile bool input_ready = false;
@@ -164,6 +165,8 @@ float fast_voltage = 0.0;              // Fast filtered voltage (corrected)
 float slow_voltage = 0.0;              // Slow filtered voltage (corrected)
 bool anti_dive_active = false;         // Anti-dive state
 unsigned long anti_dive_start_time = 0;// Anti-dive start time
+bool enable_was_active = false;
+volatile bool enable_active_g = false;
 
 // New for improved anti-dive: position history buffer
 const int POSITION_HISTORY_INTERVAL = 100; // ms between records
@@ -229,8 +232,19 @@ float simulation_offset = 2.0;          // Offset DC pour tester tracking
 #include <TFT_eSPI.h>
 
 
+// Utilisation de IRAM_ATTR pour une exécution en nanosecondes
+void IRAM_ATTR handleCNCStep() {
+  // On ne laisse passer les pas de la CNC QUE si le THC n'est pas en train de piloter
+  if (!enable_active_g) {
+    digitalWrite(STEPPER_STEP_PIN, digitalRead(CNC_Z_STEP_IN));
+  }
+}
 
-
+void IRAM_ATTR handleCNCDir() {
+  if (!enable_active_g) {
+    digitalWrite(STEPPER_DIR_PIN, digitalRead(CNC_Z_DIR_IN));
+  }
+}
 
 
 void taskLvglTick(void *pvParameters) {
@@ -293,6 +307,7 @@ void setup() {
   // On réserve 512 octets de mémoire flash pour émuler l'EEPROM
   Serial.begin(115200);
   delay(1000);
+
 //   
 // diagnose_lvgl_touch();
   if (!EEPROM.begin(512)) {
@@ -314,6 +329,8 @@ void setup() {
   // Sur ESP32, INPUT simple suffit souvent, mais INPUT_PULLUP peut stabiliser
   pinMode(CNC_Z_STEP_IN, INPUT);
   pinMode(CNC_Z_DIR_IN, INPUT);
+  attachInterrupt(digitalPinToInterrupt(CNC_Z_STEP_IN), handleCNCStep, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(CNC_Z_DIR_IN), handleCNCDir, CHANGE);
 
   // --- 3. I2C ---
   Wire.begin(ADS_I2C_SDA_PIN, ADS_I2C_SCL_PIN); // Démarre I2C sur SDA(17) et SCL(22)
@@ -327,26 +344,12 @@ void setup() {
     ads.setGain(GAIN_ONE); // ±4.096V
   }
 
-   //AJOUT TFT : Initialisation de l'écran
+     //AJOUT TFT : Initialisation de l'écran
     tft.init();
+    //tft.invertDisplay(true);
     tft.setRotation(1);     // Rotation 1 (paysage) pour un ESP32/TFT typique
     tft.fillScreen(TFT_BLACK);
-    tft.writecommand(0x01); // Software Reset
-    delay(120);
-    
-    tft.writecommand(0x11); // Sleep Out
-    delay(120);
-    
-    tft.writecommand(0x3A); // Pixel Format
-    tft.writedata(0x55);    // 16-bit
-    
-    tft.writecommand(0x36); // MADCTL
-    tft.writedata(0x28);    // MV + BGR (CONFIG 4 VALIDÉE)
-    
-    tft.writecommand(0x20); // Inversion OFF
-    
-    tft.writecommand(0x29); // Display ON
-    delay(50);
+  
     // ✅ INIT XPT2046 APRÈS TFT
     if (!ts.begin()) {
         Serial.println("❌ XPT2046 échec!");
@@ -368,7 +371,7 @@ void setup() {
 
   // Validation des valeurs (inchangé)
   if (isnan(Setpoint) || Setpoint < 80 || Setpoint > 200) Setpoint = DEFAULT_SETPOINT;
-  if (isnan(STEPS_PER_MM_Z) || STEPS_PER_MM_Z < 200 || STEPS_PER_MM_Z > 2000) STEPS_PER_MM_Z = DEFAULT_STEP_PER_MM;
+  if (isnan(STEPS_PER_MM_Z) || STEPS_PER_MM_Z < 100 || STEPS_PER_MM_Z > 1000) STEPS_PER_MM_Z = DEFAULT_STEP_PER_MM;
   if (isnan(Kp) || Kp < 0.0 || Kp > 10) Kp = DEFAULT_KP;
   if (isnan(Ki) || Ki < 0.0 || Ki > 10) Ki = DEFAULT_KI;
   if (isnan(Kd) || Kd < 0.0 || Kd > 0.1) Kd = DEFAULT_KD;
@@ -676,7 +679,6 @@ void navigateScreen(int direction) {
     
 }
 
-
 void readAndFilterVoltage() {
 
       // ✅ AJOUT : Mode simulation bypass lecture ADC
@@ -731,12 +733,21 @@ void readAndFilterVoltage() {
         static bool slow_init = false;
         
         const float ALPHA_SLOW = 0.0005f;
+        //Initialisation de fast voltage au front montant de Enable        
+bool enable_now = (digitalRead(ENABLE_PIN) == LOW);
 
-        if (!slow_init) {  // Initialisation du tableau de N_SLOW avec la valeur de raw au dédut pour ne pas commencer a 0
-            for (int i = 0; i < N_SLOW; i++) slow_samples[i] = raw;
-            slow_sum = raw * N_SLOW; 
-            slow_init = true;
-        }
+if (enable_now && !enable_was_active) {
+    // Front montant d'Enable : l'arc est déjà stabilisé côté G-code, on capture la référence ici
+    for (int i = 0; i < N_SLOW; i++) slow_samples[i] = fast_voltage;
+    slow_sum = fast_voltage * N_SLOW;
+    slow_lp = fast_voltage;
+    slow_idx = 0;
+    slow_init = true;
+}
+enable_was_active = enable_now;
+if (!enable_now && anti_dive_active) {
+    anti_dive_active = false;   // Sécurité : Enable retombé, on relâche l'axe
+}
         slow_sum -= slow_samples[slow_idx]; // supresssion de la plus ancienne valeur dans la somme
         slow_samples[slow_idx] = avg_raw; // ajout de la nouvelle valeur dans le tableau
         slow_sum += avg_raw; // Ajout de la nouvelle valeur dans la somme
@@ -773,7 +784,7 @@ void readAndFilterVoltage() {
         Serial.print(slow_voltage, 1);
         Serial.print("V | Saved: ");
         Serial.println(voltage_at_activation, 1);
-    } else if (anti_dive_active&&abs(Setpoint-slow_voltage) < RETURN_THRESHOLD&&abs(fast_voltage-slow_voltage) < RETURN_THRESHOLD) {
+    } else if (anti_dive_active&&abs(fast_voltage-slow_voltage) < RETURN_THRESHOLD) {
           anti_dive_active=false;
         }
   }
@@ -781,24 +792,25 @@ void managePlasmaAndTHC() {
 
   // ===== LECTURE DES ENTREES =====
   bool enable_active = (digitalRead(ENABLE_PIN) == LOW);      // THC ENABLE
+  enable_active_g = enable_active; 
+    // Resynchronisation immédiate et systématique de la direction dès qu'Enable
+  // est inactif, qu'on soit encore en anti-dive ou déjà en passthrough pur.
+  // Évite qu'un pas de retrait CNC parte avec une direction périmée héritée du PID.
+  if (!enable_active) {
+      digitalWrite(STEPPER_DIR_PIN, digitalRead(CNC_Z_DIR_IN));
+  }
+
   bool thc_off       = (digitalRead(THC_OFF_PIN) == HIGH);
   unsigned long currentTime = millis();
-
-   bool last_thc_active = false;
-
-  if (thc_active && !last_thc_active) {
-      z_reference = stepper.currentPosition();
-  }
-  last_thc_active = thc_active;
 
     // Détection arc plasma
   arc_voltage_ok = (fast_voltage > arc_threshold);
   
   // Determine THC state
     thc_active = enable_active &&
-               arc_voltage_ok &&
-               !anti_dive_active &&
-               !thc_off;
+               arc_voltage_ok;// &&
+               //!anti_dive_active &&
+               //!thc_off
   
     // --- 5. LOGIQUE DE COMMANDE DU MOTEUR Z ---
 
@@ -841,20 +853,16 @@ void managePlasmaAndTHC() {
             pid_running = false;
             Serial.println("PID stopped - Passthrough mode ");
         // 2. Désactiver AccelStepper pour éviter les conflits
+
+        }
         stepper.stop();      
         z_target = stepper.currentPosition();
         stepper.moveTo(z_target);
         use_accelstepper_run = false;
         z_target = 0;
-        }
-        
-        
-        // 2. Copie directe vers les broches de sortie (Passthrough)
-        int stepState = digitalRead(CNC_Z_STEP_IN); 
-        int dirState = digitalRead(CNC_Z_DIR_IN); 
-        digitalWrite(STEPPER_STEP_PIN, stepState); 
-        digitalWrite(STEPPER_DIR_PIN, dirState);
-        
-
+        // Resynchronisation forcée de la direction : ne pas attendre un futur
+        // changement d'état de CNC_Z_DIR_IN, qui pourrait ne jamais arriver
+        // si la direction n'a pas besoin de changer pour le prochain mouvement CNC.
+        digitalWrite(STEPPER_DIR_PIN, digitalRead(CNC_Z_DIR_IN));
     }
-} 
+}

@@ -458,7 +458,7 @@ void btn_adjust_event_handler(lv_event_t *e) {
             case 4: // Steps per mm
                 increment = 10.0;
                 STEPS_PER_MM_Z += direction * increment;
-                STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 200.0, 2000.0);
+                STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 100.0, 1000.0);
                 
                 if (label_steps_val != NULL) {
                     snprintf(buf, sizeof(buf), "%.0f", STEPS_PER_MM_Z);
@@ -539,7 +539,7 @@ void btn_adjust_multi_event(lv_event_t *e) {
                 
             case 3: // Steps
                 STEPS_PER_MM_Z += direction * 10.0*multiplier;
-                STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 200.0, 2000.0);
+                STEPS_PER_MM_Z = constrain(STEPS_PER_MM_Z, 100.0, 1000.0);
                 snprintf(buf, sizeof(buf), "%.0f", STEPS_PER_MM_Z);
                 break;
 
@@ -696,14 +696,6 @@ void lv_touchpad_read(lv_indev_drv_t * indev, lv_indev_data_t * data) {
             data->point.x = constrain(data->point.x, 0, SCREEN_WIDTH - 1);
             data->point.y = constrain(data->point.y, 0, SCREEN_HEIGHT - 1);
 
-            // ✅ DEBUG IMPORTANT : Afficher les touches
-            static unsigned long lastDebug = 0;
-            if (millis() - lastDebug > 500) {
-                Serial.printf("📱 Touch: RAW(%d,%d) -> Screen(%d,%d)\n", 
-                             p.x, p.y, data->point.x, data->point.y);
-                lastDebug = millis();
-            }
-
         } else {
             data->state = LV_INDEV_STATE_REL;
         }
@@ -776,19 +768,8 @@ void lvgl_setup() {
     // Serial.printf("   ✅ Setpoint créé: %p\n", screen_setpoint);
     create_screen_graph();
     Serial.printf("   ✅ Graph créé: %p\n", screen_graph);
-    // create_screen_kp();
-    // Serial.printf("   ✅ Kp créé: %p\n", screen_kp);
-    // create_screen_ki();
-    // Serial.printf("   ✅ Ki créé: %p\n", screen_ki);
-    // create_screen_steps();
-    // Serial.printf("   ✅ Steps créé: %p\n", screen_steps);
     create_screen_settings();
     Serial.printf("   ✅ Settings créé: %p\n", screen_settings);
-        // ✅ VÉRIFICATION CRITIQUE
-    // if (screen_monitoring == NULL || screen_setpoint == NULL) {
-    //     Serial.println("❌ ERREUR FATALE: Écrans non créés!");
-    //     while(1) { delay(1000); } // Bloquer pour debug
-    // }
     // Charger l'écran principal
     lv_scr_load(screen_monitoring);
     Serial.println("LVGL initialisé avec succès");
