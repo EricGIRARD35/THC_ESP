@@ -19,13 +19,14 @@ extern SemaphoreHandle_t i2cMutex;
 extern SemaphoreHandle_t dataMutex;
 extern SemaphoreHandle_t graphMutex;
 
-// EEPROM addresses for parameters (Rien ne change ici)
+// EEPROM addresses for parameters
 #define EEPROM_SETPOINT_ADDR 0
-#define EEPROM_CORRECTION_FACTOR_ADDR 4
+#define EEPROM_DROP_THRESHOLD_ADDR 4
+#define EEPROM_RETURN_THRESHOLD_ADDR 6
 #define EEPROM_STEPS_MM_Z_ADDR 8
 #define EEPROM_KP_ADDR 16
 #define EEPROM_KI_ADDR 20
-#define EEPROM_KD_ADDR 24
+#define EEPROM_DIVISEUR_VOLTAGE_ADDR 24
 #define EEPROM_INITIALIZED_FLAG 28
 
 // ========================================
@@ -73,7 +74,7 @@ extern lv_obj_t *label_steps_val;
 extern lv_obj_t *label_param_name;
 extern lv_obj_t *label_param_value;
 extern int selected_param;
-extern const char* param_names[6];
+extern const char* param_names[7];
 
 // Variable currentScreen
 extern int currentScreen;

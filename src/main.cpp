@@ -72,7 +72,7 @@ const float ADS_RESOLUTION_MAX = 32767.0;
 
 // Rapport de votre diviseur de tension (Exemple : si 40:1, alors 1/40 = 0.025)
 // C'est le coefficient K tel que V_plasma = V_mesurée / K
-const float PLASMA_VOLTAGE_DIVIDER_RATIO = 0.01623; // Vérifiez votre diviseur réel !
+float PLASMA_VOLTAGE_DIVIDER_RATIO = 61.6; // Vérifiez votre diviseur réel !
 
 // Variables pour la lecture tactile non-bloquante
 unsigned long lastTouchTime = 0;
@@ -198,6 +198,13 @@ void managePlasmaAndTHC();
 void countStepX();
 void countStepY();
 // void updateDisplay();
+
+// === ANTI-DIVE : SÉCURISÉ → UNIQUEMENT si THC ACTIVE ! ===
+float voltage_at_activation = 0.0f;
+float DROP_THRESHOLD = 5.0f;
+float RETURN_THRESHOLD = 3.0f;
+const unsigned long MAX_ANTI_DIVE_DURATION = 1000;
+bool last_anti_dive_state = false;
 
 // ========================================
 // SIMULATEUR DE SINUSOÏDE POUR TEST PID
@@ -349,7 +356,7 @@ void setup() {
     // Initialisation LVGL (APRÈS TFT)
     lvgl_setup();
 
-    update_all_screen_values();
+    //update_all_screen_values();
 
   for (int i = 0; i < speed_filter_size; i++) {
     speed_readings[i] = 0.0;
@@ -363,15 +370,12 @@ void setup() {
 
   // Validation des valeurs (inchangé)
   if (isnan(Setpoint) || Setpoint < 80 || Setpoint > 200) Setpoint = DEFAULT_SETPOINT;
-  //if (isnan(voltage_correction_factor) || voltage_correction_factor < 0.5 || voltage_correction_factor > 2.0) voltage_correction_factor = DEFAULT_CORRECTION_FACTOR;
   if (isnan(STEPS_PER_MM_Z) || STEPS_PER_MM_Z < 200 || STEPS_PER_MM_Z > 2000) STEPS_PER_MM_Z = DEFAULT_STEP_PER_MM;
-  //if (isnan(Kp) || Kp < 0.0 || Kp > 10) Kp = DEFAULT_KP;
+  if (isnan(Kp) || Kp < 0.0 || Kp > 10) Kp = DEFAULT_KP;
   if (isnan(Ki) || Ki < 0.0 || Ki > 10) Ki = DEFAULT_KI;
   if (isnan(Kd) || Kd < 0.0 || Kd > 0.1) Kd = DEFAULT_KD;
   myPID.SetTunings(Kp, Ki, Kd);
   
-  //threshold_speed = cut_speed * threshold_ratio;
-
   // --- 4. Résolution ADC ---
   // L'ESP32 est 12 bits max (0-4095). 
   // Si vous aviez des calculs basés sur 14 bits (16383), il faudra les diviser par 4.
@@ -441,7 +445,14 @@ void initializeEEPROM() {
         EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, DEFAULT_STEP_PER_MM);
         EEPROM.put(EEPROM_KP_ADDR, DEFAULT_KP); // Écrit la valeur non nulle (p. ex. 100.0)
         EEPROM.put(EEPROM_KI_ADDR, DEFAULT_KI);
-        EEPROM.put(EEPROM_KD_ADDR, DEFAULT_KD);
+        EEPROM.put(EEPROM_DIVISEUR_VOLTAGE_ADDR, PLASMA_VOLTAGE_DIVIDER_RATIO);
+
+// Stockage en uint16_t (2 octets) pour les seuils
+        uint16_t drop_val = (uint16_t)(DROP_THRESHOLD * 10);
+        uint16_t ret_val  = (uint16_t)(RETURN_THRESHOLD * 10);
+        
+        EEPROM.put(EEPROM_DROP_THRESHOLD_ADDR, drop_val); // uint16 (2 oct)
+        EEPROM.put(EEPROM_RETURN_THRESHOLD_ADDR, ret_val); // uint16 (2 oct)      
 
         // Set the initialized flag
         initializedFlag = 0xAA;
@@ -460,10 +471,6 @@ void initializeEEPROM() {
     Setpoint = temp;
     Serial.print("Loaded Setpoint: "); Serial.println(Setpoint, 2);
 
-    EEPROM.get(EEPROM_CORRECTION_FACTOR_ADDR, temp);
-    voltage_correction_factor = temp;
-    Serial.print("Loaded voltage_correction_factor: "); Serial.println(voltage_correction_factor, 2);
-
     EEPROM.get(EEPROM_KP_ADDR, temp);
     Kp = temp;
     Serial.print("Loaded Kp: "); Serial.println(Kp, 2);
@@ -472,12 +479,22 @@ void initializeEEPROM() {
     Ki = temp;
     Serial.print("Loaded Ki: "); Serial.println(Ki, 4);
 
-    EEPROM.get(EEPROM_KD_ADDR, temp);
-    Kd = temp;
-    Serial.print("Loaded Kd: "); Serial.println(Kd, 4);
+    EEPROM.get(EEPROM_DIVISEUR_VOLTAGE_ADDR, temp);
+    PLASMA_VOLTAGE_DIVIDER_RATIO = temp;
+    Serial.print("Loaded PLASMA_VOLTAGE_DIVIDER_RATIO: "); Serial.println(PLASMA_VOLTAGE_DIVIDER_RATIO, 4);
 
     EEPROM.get(EEPROM_STEPS_MM_Z_ADDR, STEPS_PER_MM_Z);
     Serial.print("Loaded steps par mm: "); Serial.println(STEPS_PER_MM_Z, 4);
+
+    // Charger les seuils de drop/return
+    uint16_t drop_val = 0;              
+    uint16_t ret_val = 0;
+    EEPROM.get(EEPROM_DROP_THRESHOLD_ADDR, drop_val);
+    EEPROM.get(EEPROM_RETURN_THRESHOLD_ADDR, ret_val);
+    DROP_THRESHOLD = (float)drop_val / 10.0;
+    RETURN_THRESHOLD = (float)ret_val / 10.0;
+    Serial.print("Loaded DROP_THRESHOLD: "); Serial.println(DROP_THRESHOLD, 1);
+    Serial.print("Loaded RETURN_THRESHOLD: "); Serial.println(RETURN_THRESHOLD, 1);
 }
 
  void loop() {
@@ -554,7 +571,7 @@ void initializeEEPROM() {
                 //EEPROM.put(EEPROM_CORRECTION_FACTOR_ADDR, DEFAULT_CORRECTION_FACTOR);
                 EEPROM.put(EEPROM_KP_ADDR, DEFAULT_KP);
                 EEPROM.put(EEPROM_KI_ADDR, DEFAULT_KI);
-                EEPROM.put(EEPROM_KD_ADDR, DEFAULT_KD);
+                EEPROM.put(EEPROM_DIVISEUR_VOLTAGE_ADDR, PLASMA_VOLTAGE_DIVIDER_RATIO);
                 EEPROM.put(EEPROM_STEPS_MM_Z_ADDR, DEFAULT_STEP_PER_MM);
                 byte flag = 0xAA;
                 EEPROM.put(EEPROM_INITIALIZED_FLAG, flag);
@@ -563,14 +580,12 @@ void initializeEEPROM() {
                 float temp;
                 EEPROM.get(EEPROM_SETPOINT_ADDR, temp);
                 Setpoint = temp;
-                EEPROM.get(EEPROM_CORRECTION_FACTOR_ADDR, temp);
-                voltage_correction_factor = temp;
                 EEPROM.get(EEPROM_KP_ADDR, temp);
                 Kp = temp;
                 EEPROM.get(EEPROM_KI_ADDR, temp);
                 Ki = temp;
-                EEPROM.get(EEPROM_KD_ADDR, temp);
-                Kd = temp;
+                EEPROM.get(EEPROM_DIVISEUR_VOLTAGE_ADDR, temp);
+                PLASMA_VOLTAGE_DIVIDER_RATIO = temp;
                 myPID.SetTunings(Kp, Ki, Kd);
                 EEPROM.get(EEPROM_STEPS_MM_Z_ADDR, STEPS_PER_MM_Z);
                 Serial.println("EEPROM reset via serial command");
@@ -698,8 +713,8 @@ void readAndFilterVoltage() {
     float V_divided = ((float)adc_raw_value * ADS_GAIN_V) / ADS_RESOLUTION_MAX;
 
     // 2. Tension plasma réelle (V_plasma)
-    //    V_plasma = V_divided / PLASMA_VOLTAGE_DIVIDER_RATIO
-    float raw = V_divided / PLASMA_VOLTAGE_DIVIDER_RATIO;
+    //    V_plasma = V_divided * PLASMA_VOLTAGE_DIVIDER_RATIO
+    float raw = V_divided * PLASMA_VOLTAGE_DIVIDER_RATIO;
     
     // === FAST : Echantillonnage 10x + Low-pass (PID input) ===
     oversample_sum += raw;
@@ -745,12 +760,7 @@ void readAndFilterVoltage() {
     }
 
 
-    // === ANTI-DIVE : SÉCURISÉ → UNIQUEMENT si THC ACTIVE ! ===
-     float voltage_at_activation = 0.0f;
-    const float DROP_THRESHOLD = 5.0f;
-    const float RETURN_THRESHOLD = 3.0f;
-    const unsigned long MAX_ANTI_DIVE_DURATION = 1000;
-     bool last_anti_dive_state = false;
+
 
     // Activation désactivation de l'Anti_Div
     if (warmed_up && 
