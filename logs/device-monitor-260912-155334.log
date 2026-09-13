@@ -1,0 +1,245 @@
+ets Jul 29 2019 12:21:46
+
+rst:0x1 (POWERON_RESET),boot:0x13 (SPI_FAST_FLASH_BOOT)
+configsip: 0, SPIWP:0xee
+clk_drv:0x00,q_drv:0x00,d_drv:0x00,cs0_drv:0x00,hd_drv:0x00,wp_drv:0x00
+mode:DIO, clock div:2
+load:0x3fff0030,len:1184
+load:0x40078000,len:13232
+load:0x40080400,len:3028
+entry 0x400805e4
+Loaded Setpoint: 105.00
+Loaded Kp: 0.70
+Loaded Ki: 0.3000
+Loaded PLASMA_VOLTAGE_DIVIDER_RATIO: 76.4000
+Loaded steps par mm: 110.0000
+Loaded DROP_THRESHOLD: 30.0
+Loaded RETURN_THRESHOLD: 25.0
+Initialisation de l'ADS1115...
+ADS1115 OK
+[  1732][E][esp32-hal-cpu.c:110] addApbChangeCallback(): duplicate func=0x40115d40 arg=0x3ffbf664
+Initialisation LVGL...
+   ✅ Display driver enregistré
+   Driver tactile avant enregistrement:
+   - Type: 1 (devrait être 1)
+   - Callback: 0x400d3eb0
+   ✅ Touch driver enregistré
+   - Pointeur indev: 0x3ffcce2c
+   - Type après enregistrement: 1
+   - Callback après enregistrement: 0x400d3eb0
+   🧪 Test manuel du callback tactile...
+   État retourné: 0
+📄 Création des écrans...
+🏗️ Création screen_monitoring...
+✅ screen_monitoring créé: 0x3ffccebc
+   ✅ Monitoring créé: 0x3ffccebc
+✅ Écran graphique créé
+   ✅ Graph créé: 0x3ffce0d4
+   ✅ Settings créé: 0x3ffcee34
+LVGL initialisé avec succès
+📱 Task UI démarrée sur Core 1
+✅ Task UI créée avec succès
+ENABLE PIN: HIGH | Arc detected: No | THC OFF: No | THC active: INACTIVE  | Fast voltage: 0.15 V | Slow voltage: 0.60 V | Anti-dive: Inactive📱 Task UI: 124 appels | Fast: 0.2V | Slow: 0.6V
+ | Kp: 0.70
+Reason THC inactive: ENABLE_PIN HIGH
+📱 Task UI: 408 appels | Fast: 2.0V | Slow: 0.9V
+ENABLE PIN: HIGH | Arc detected: No | THC OFF: No | THC active: INACTIVE  | Fast voltage: 1.99 V | Slow voltage: 0.89 V | Anti-dive: Inactive | Kp: 0.70
+Reason THC inactive: ENABLE_PIN HIGH
+Average execution time: 49 us | Frequency: 20408.2 Hz
+ENABLE PIN: HIGH | Arc detected: No | THC OFF: No | THC active: INACTIVE  | Fast voltage: 0.00 V | Slow voltage: 0.80 V | Anti-dive: Inactive📱 Task UI: 418 appels | Fast: 0.0V | Slow: 0.8V
+ | Kp: 0.70
+Reason THC inactive: ENABLE_PIN HIGH
+📱 Task UI: 394 appels | Fast: 1.4V | Slow: 0.8V
+ENABLE PIN: HIGH | Arc detected: No | THC OFF: No | THC active: INACTIVE  | Fast voltage: 1.38 V | Slow voltage: 0.79 V | Anti-dive: Inactive | Kp: 0.70
+Reason THC inactive: ENABLE_PIN HIGH
+Average execution time: 47 us | Frequency: 21276.6 Hz
+ENABLE PIN: HIGH | Arc detected: No | THC OFF: No | THC active: INACTIVE  | Fast voltage: 0.81 V | Slow voltage: 0.85 V | Anti-dive: Inactive📱 Task UI: 416 appels | Fast: 0.8V | Slow: 0.8V
+ | Kp: 0.70
+Reason THC inactive: ENABLE_PIN HIGH
+ENABLE PIN: HIGH | Arc detected: No | THC OFF: No | THC active: INACTIVE  | Fast voltage: 1.68 V | Slow voltage: 0.76 V | Anti-dive: Inactive | Kp: 0.70
+Reason THC inactive: ENABLE_PIN HIGH
+Average execution time: 47 us | Frequency: 21276.6 Hz
+📱 Task UI: 409 appels | Fast: 1.4V | Slow: 0.8V
+ENABLE PIN: HIGH | Arc detected: No | THC OFF: No | THC active: INACTIVE  | Fast voltage: 2.75 V | Slow voltage: 0.82 V | Anti-dive: Inactive📱 Task UI: 407 appels | Fast: 2.8V | Slow: 0.8V
+ | Kp: 0.70
+Reason THC inactive: ENABLE_PIN HIGH
+ENABLE PIN: HIGH | Arc detected: No | THC OFF: No | THC active: INACTIVE  | Fast voltage: 0.00 V | Slow voltage: 0.72 V | Anti-dive: Inactive | Kp: 0.70
+Reason THC inactive: ENABLE_PIN HIGH
+Average execution time: 48 us | Frequency: 20833.3 Hz
+📱 Task UI: 406 appels | Fast: 0.2V | Slow: 0.7V
+Setpoint:105.00,fast_voltage:120.41,Output:10.79
+**Anti-dive ON (THC ACTIVE)** | Cut: 120.4V | Slow: 53.8V | Saved: 53.8
+Setpoint:105.00,fast_voltage:119.80,Output:10.49
+Setpoint:105.00,fast_voltage:116.44,Output:8.26
+Setpoint:105.00,fast_voltage:116.44,Output:8.33
+Setpoint:105.00,fast_voltage:103.75,Output:-0.55
+Setpoint:105.00,fast_voltage:108.95,Output:3.09
+Setpoint:105.00,fast_voltage:108.95,Output:3.11
+Setpoint:105.00,fast_voltage:92.14,Output:-8.77
+Setpoint:105.00,fast_voltage:102.38,Output:-1.69
+Setpoint:105.00,fast_voltage:102.38,Output:-1.71
+**Anti-dive ON (THC ACTIVE)** | Cut: 83.9V | Slow: 116.5V | Saved: 116.5
+Setpoint:105.00,fast_voltage:82.06,Output:0.00
+Setpoint:105.00,fast_voltage:84.96,Output:0.00
+Setpoint:105.00,fast_voltage:84.96,Output:0.00
+Setpoint:105.00,fast_voltage:87.56,Output:-12.33
+Setpoint:105.00,fast_voltage:82.21,Output:-16.23
+Setpoint:105.00,fast_voltage:82.21,Output:-16.38
+Setpoint:105.00,fast_voltage:84.35,Output:-15.04
+Setpoint:105.00,fast_voltage:84.35,Output:-15.08
+Setpoint:105.00,fast_voltage:86.03,Output:-14.07
+Setpoint:105.00,fast_voltage:94.59,Output:-8.23
+Setpoint:105.00,fast_voltage:94.59,Output:-8.27
+Setpoint:105.00,fast_voltage:107.88,Output:1.06
+Setpoint:105.00,fast_voltage:112.92,Output:4.63
+Setpoint:105.00,fast_voltage:112.92,Output:4.67
+Setpoint:105.00,fast_voltage:120.10,Output:9.83
+Setpoint:105.00,fast_voltage:119.49,Output:9.53
+Setpoint:105.00,fast_voltage:119.49,Output:9.62
+Setpoint:105.00,fast_voltage:129.43,Output:16.78
+Setpoint:105.00,fast_voltage:124.84,Output:13.78
+Setpoint:105.00,fast_voltage:124.84,Output:13.91
+Setpoint:105.00,fast_voltage:122.85,Output:12.68
+Setpoint:105.00,fast_voltage:119.49,Output:10.48
+Setpoint:105.00,fast_voltage:119.49,Output:10.56
+Setpoint:105.00,fast_voltage:114.60,Output:7.23
+Setpoint:105.00,fast_voltage:97.64,Output:-4.61
+Setpoint:105.00,fast_voltage:97.64,Output:-4.65
+Setpoint:105.00,fast_voltage:97.03,Output:-5.15
+Setpoint:105.00,fast_voltage:87.86,Output:-11.66
+Setpoint:105.00,fast_voltage:87.86,Output:-11.77
+**Anti-dive ON (THC ACTIVE)** | Cut: 79.2V | Slow: 109.8V | Saved: 109.8
+Setpoint:105.00,fast_voltage:78.54,Output:0.00
+Setpoint:105.00,fast_voltage:87.25,Output:-12.48
+Setpoint:105.00,fast_voltage:87.25,Output:-12.56
+Setpoint:105.00,fast_voltage:82.06,Output:-16.40
+Setpoint:105.00,fast_voltage:84.96,Output:-14.56
+Setpoint:105.00,fast_voltage:84.96,Output:-14.66
+Setpoint:105.00,fast_voltage:84.35,Output:-15.26
+Setpoint:105.00,fast_voltage:77.32,Output:-20.38
+Setpoint:105.00,fast_voltage:77.32,Output:-20.57
+Setpoint:105.00,fast_voltage:87.25,Output:-13.78
+ENABLE PIN: LOW | Arc detected: Yes | THC OFF: No | THC active: ACTIVE  | Fast voltage: 87.25 V | Slow voltage: 100.28 V | Anti-dive: Inactive | Kp: 0.70
+Setpoint:105.00,fast_voltage:87.25,Output:-13.89
+📱 Task UI: 368 appels | Fast: 101.8V | Slow: 99.9V
+Setpoint:105.00,fast_voltage:101.77,Output:-3.75
+Setpoint:105.00,fast_voltage:105.44,Output:-1.18
+Setpoint:105.00,fast_voltage:110.78,Output:2.58
+Setpoint:105.00,fast_voltage:110.78,Output:2.61
+Setpoint:105.00,fast_voltage:121.17,Output:10.03
+Setpoint:105.00,fast_voltage:116.74,Output:7.06
+Setpoint:105.00,fast_voltage:116.74,Output:7.13
+Setpoint:105.00,fast_voltage:119.95,Output:9.51
+Setpoint:105.00,fast_voltage:118.42,Output:8.57
+Setpoint:105.00,fast_voltage:118.42,Output:8.65
+Setpoint:105.00,fast_voltage:117.20,Output:7.90
+Setpoint:105.00,fast_voltage:111.55,Output:4.04
+Setpoint:105.00,fast_voltage:111.55,Output:4.07
+Setpoint:105.00,fast_voltage:100.70,Output:-3.56
+Setpoint:105.00,fast_voltage:101.92,Output:-2.74
+Setpoint:105.00,fast_voltage:100.97,Output:-3.43
+Setpoint:105.00,fast_voltage:88.32,Output:-12.43
+Setpoint:105.00,fast_voltage:81.60,Output:-17.30
+Setpoint:105.00,fast_voltage:81.60,Output:-17.41
+Setpoint:105.00,fast_voltage:74.26,Output:-22.80
+Setpoint:105.00,fast_voltage:82.97,Output:-16.96
+Setpoint:105.00,fast_voltage:82.97,Output:-17.08
+Setpoint:105.00,fast_voltage:85.57,Output:-15.44
+Setpoint:105.00,fast_voltage:98.10,Output:-6.80
+Setpoint:105.00,fast_voltage:98.10,Output:-6.83
+Setpoint:105.00,fast_voltage:101.31,Output:-4.62
+Setpoint:105.00,fast_voltage:111.39,Output:2.44
+Setpoint:105.00,fast_voltage:111.39,Output:2.47
+Setpoint:105.00,fast_voltage:118.12,Output:7.29
+Setpoint:105.00,fast_voltage:120.10,Output:8.80
+Setpoint:105.00,fast_voltage:120.10,Output:8.90
+Setpoint:105.00,fast_voltage:115.37,Output:5.67
+Setpoint:105.00,fast_voltage:125.30,Output:12.74
+Setpoint:105.00,fast_voltage:125.30,Output:12.84
+Setpoint:105.00,fast_voltage:115.67,Output:6.20
+Setpoint:105.00,fast_voltage:115.83,Output:6.40
+Setpoint:105.00,fast_voltage:115.83,Output:6.47
+Setpoint:105.00,fast_voltage:116.74,Output:7.22
+Setpoint:105.00,fast_voltage:104.21,Output:-1.49
+Setpoint:105.00,fast_voltage:104.21,Output:-1.49
+Setpoint:105.00,fast_voltage:97.95,Output:-5.94
+Setpoint:105.00,fast_voltage:89.09,Output:-12.22
+Setpoint:105.00,fast_voltage:89.09,Output:-12.32
+Setpoint:105.00,fast_voltage:89.54,Output:-12.15
+Setpoint:105.00,fast_voltage:92.91,Output:-9.92
+Setpoint:105.00,fast_voltage:92.91,Output:-9.97
+Setpoint:105.00,fast_voltage:82.36,Output:-17.55
+Setpoint:105.00,fast_voltage:76.10,Output:-22.16
+Setpoint:105.00,fast_voltage:76.10,Output:-22.30
+Setpoint:105.00,fast_voltage:90.31,Output:-12.49
+Setpoint:105.00,fast_voltage:90.77,Output:-12.29
+Setpoint:105.00,fast_voltage:90.77,Output:-12.36
+Setpoint:105.00,fast_voltage:100.09,Output:-5.88
+Setpoint:105.00,fast_voltage:115.21,Output:4.69
+Setpoint:105.00,fast_voltage:115.21,Output:4.76
+Setpoint:105.00,fast_voltage:116.59,Output:5.83
+Setpoint:105.00,fast_voltage:122.55,Output:10.12
+Setpoint:105.00,fast_voltage:122.55,Output:10.23
+Setpoint:105.00,fast_voltage:128.20,Output:14.39
+Setpoint:105.00,fast_voltage:130.19,Output:15.99
+Setpoint:105.00,fast_voltage:130.19,Output:16.15
+Setpoint:105.00,fast_voltage:122.85,Output:11.18
+Setpoint:105.00,fast_voltage:127.29,Output:14.45
+Setpoint:105.00,fast_voltage:127.29,Output:14.60
+Setpoint:105.00,fast_voltage:121.48,Output:10.69
+Setpoint:105.00,fast_voltage:115.52,Output:6.65
+Setpoint:105.00,fast_voltage:115.52,Output:6.70
+Setpoint:105.00,fast_voltage:112.16,Output:4.41
+Setpoint:105.00,fast_voltage:97.18,Output:-6.04
+Setpoint:105.00,fast_voltage:97.18,Output:-6.09
+Setpoint:105.00,fast_voltage:89.39,Output:-11.69
+Setpoint:105.00,fast_voltage:93.67,Output:-8.82
+Setpoint:105.00,fast_voltage:93.67,Output:-8.89
+ENABLE PIN: LOW | Arc detected: Yes | THC OFF: No | THC active: ACTIVE  | Fast voltage: 93.67 V | Slow voltage: 107.49 V | Anti-dive: Inactive | Kp: 0.70
+Average execution time: 64 us | Frequency: 15625.0 Hz
+Setpoint:105.00,fast_voltage:93.82,Output:-8.86
+📱 Task UI: 384 appels | Fast: 87.9V | Slow: 106.4V
+Setpoint:105.00,fast_voltage:87.86,Output:-13.14
+Setpoint:105.00,fast_voltage:87.86,Output:-13.22
+Setpoint:105.00,fast_voltage:82.06,Output:-17.50
+Setpoint:105.00,fast_voltage:87.25,Output:-14.05
+Setpoint:105.00,fast_voltage:87.25,Output:-14.13
+Setpoint:105.00,fast_voltage:80.38,Output:-19.17
+Setpoint:105.00,fast_voltage:85.72,Output:-15.63
+Setpoint:105.00,fast_voltage:85.72,Output:-15.72
+Setpoint:105.00,fast_voltage:78.85,Output:-20.77
+Setpoint:105.00,fast_voltage:78.69,Output:-21.10
+Setpoint:105.00,fast_voltage:78.69,Output:-21.23
+Setpoint:105.00,fast_voltage:74.11,Output:-24.72
+Setpoint:105.00,fast_voltage:93.36,Output:-11.46
+Setpoint:105.00,fast_voltage:93.36,Output:-11.53
+Setpoint:105.00,fast_voltage:108.64,Output:-0.80
+Setpoint:105.00,fast_voltage:117.51,Output:5.46
+Setpoint:105.00,fast_voltage:117.51,Output:5.51
+Setpoint:105.00,fast_voltage:125.45,Output:11.25
+**Anti-dive ON (THC ACTIVE)** | Cut: 129.0V | Slow: 98.8V | Saved: 98.8
+Setpoint:105.00,fast_voltage:132.79,Output:0.00
+Setpoint:105.00,fast_voltage:132.79,Output:0.00
+Setpoint:105.00,fast_voltage:127.90,Output:0.00
+Setpoint:105.00,fast_voltage:131.26,Output:0.00
+Setpoint:105.00,fast_voltage:131.26,Output:0.00
+Setpoint:105.00,fast_voltage:129.27,Output:17.15
+Setpoint:105.00,fast_voltage:135.08,Output:21.43
+Setpoint:105.00,fast_voltage:135.08,Output:21.68
+**Anti-dive ON (THC ACTIVE)** | Cut: 137.2V | Slow: 107.2V | Saved: 107.2
+Setpoint:105.00,fast_voltage:137.98,Output:0.00
+Setpoint:105.00,fast_voltage:137.98,Output:0.00
+Setpoint:105.00,fast_voltage:133.86,Output:20.42
+Setpoint:105.00,fast_voltage:139.36,Output:24.53
+Setpoint:105.00,fast_voltage:139.36,Output:24.65
+PID stopped - Passthrough mode 
+ENABLE PIN: HIGH | Arc detected: No | THC OFF: No | THC active: INACTIVE  | Fast voltage: 0.15 V | Slow voltage: 43.18 V | Anti-dive: Inactive📱 Task UI: 348 appels | Fast: 0.2V | Slow: 43.2V
+ | Kp: 0.70
+Reason THC inactive: ENABLE_PIN HIGH
+ENABLE PIN: HIGH | Arc detected: No | THC OFF: No | THC active: INACTIVE  | Fast voltage: 0.00 V | Slow voltage: 5.98 V | Anti-dive: Inactive | Kp: 0.70
+Reason THC inactive: ENABLE_PIN HIGH
+Average execution time: 93 us | Frequency: 10752.7 Hz
+📱 Task UI: 405 appels | Fast: -0.2V | Slow: 5.7V
+ENABLE PIN: HIGH | Arc detected: No | THC OFF: No | THC active: INACTIVE  | Fast voltage: 2.14 V | Slow voltage: 1.39 V | Anti-dive: Inactive | Kp: 0.70
+Reason THC inactive: ENABLE_PIN HIGH
+📱 Task UI: 388 appels | Fast: 2.1V | Slow: 1.4V

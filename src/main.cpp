@@ -89,13 +89,15 @@ void  lv_scr_load();
 
 
 // Parametres par défaut
-const float DEFAULT_SETPOINT = 110.0; //Attention valeur de DEFAULT stocké sur 4 octets mais utilisé en double pour le PID
+const float DEFAULT_SETPOINT = 100.0; //Attention valeur de DEFAULT stocké sur 4 octets mais utilisé en double pour le PID
 static float slow_lp = 0.0f;
 const float DEFAULT_STEP_PER_MM = 400;
-const float DEFAULT_KP = 2; // attention l'action proportionnel agit dans ce cas comme une action intégrale en agissant sur la vitesse du moteur Z et non sur sa position.
-const float DEFAULT_KI = 5; 
+const float DEFAULT_KP = 1; // attention l'action proportionnel agit dans ce cas comme une action intégrale en agissant sur la vitesse du moteur Z et non sur sa position.
+const float DEFAULT_KI = 0.5; 
 const float DEFAULT_KD = 0; // Laisser l'action dérivé a 0
-
+float previousOutput = 0.0;
+const float KP_SCALE = 0.1;
+static unsigned long lastPlotPrint = 0;
 double voltage_correction_factor = 1.0;
 #define DEFAULT_VOLTAGEDIVIDER 50.0
 #define MM_PER_VOLT_Z 1.0 // A ajuster lors des essais
@@ -187,7 +189,7 @@ const unsigned long EEPROM_WRITE_INTERVAL = 1000;
 // float temp_voltage_correction_factor = DEFAULT_CORRECTION_FACTOR;
 
 // === OVERSAMPLING NON-BLOQUANT pour PID ultra-stable ===
-#define OVERSAMPLE_TARGET 10  // 10 samples ~10ms @1kHz
+#define OVERSAMPLE_TARGET 6  // 10 samples ~10ms @1kHz
  float oversample_sum = 0.0;
  uint8_t oversample_count = 0;
  float last_pid_input = 0.0;  // Dernière moyenne pour low-pass
@@ -365,7 +367,7 @@ void setup() {
 
   myPID.SetOutputLimits(-100, 100); 
   myPID.SetMode(AUTOMATIC);
-  myPID.SetTunings(Kp, Ki, Kd);
+  myPID.SetTunings(Kp * KP_SCALE, Ki, Kd);
   myPID.SetSampleTime(1); 
   
 
@@ -375,7 +377,7 @@ void setup() {
   if (isnan(Kp) || Kp < 0.0 || Kp > 10) Kp = DEFAULT_KP;
   if (isnan(Ki) || Ki < 0.0 || Ki > 10) Ki = DEFAULT_KI;
   if (isnan(Kd) || Kd < 0.0 || Kd > 0.1) Kd = DEFAULT_KD;
-  myPID.SetTunings(Kp, Ki, Kd);
+  myPID.SetTunings(Kp * KP_SCALE, Ki, Kd);
   
   // --- 4. Résolution ADC ---
   // L'ESP32 est 12 bits max (0-4095). 
@@ -587,7 +589,7 @@ void initializeEEPROM() {
                 Ki = temp;
                 EEPROM.get(EEPROM_DIVISEUR_VOLTAGE_ADDR, temp);
                 PLASMA_VOLTAGE_DIVIDER_RATIO = temp;
-                myPID.SetTunings(Kp, Ki, Kd);
+                myPID.SetTunings(Kp * KP_SCALE, Ki, Kd);
                 EEPROM.get(EEPROM_STEPS_MM_Z_ADDR, STEPS_PER_MM_Z);
                 Serial.println("EEPROM reset via serial command");
             }
@@ -832,6 +834,7 @@ void managePlasmaAndTHC() {
         }
         
         myPID.Compute();
+
         z_target = Output * STEPS_PER_MM_Z;
         // Configuration moteur
         stepper.setMaxSpeed(5000);
@@ -865,4 +868,12 @@ void managePlasmaAndTHC() {
         // si la direction n'a pas besoin de changer pour le prochain mouvement CNC.
         digitalWrite(STEPPER_DIR_PIN, digitalRead(CNC_Z_DIR_IN));
     }
+
+if (thc_active && millis() - lastPlotPrint >= 30) {
+    Serial.print("t:"); Serial.print(millis());
+    Serial.print("Setpoint:"); Serial.print(Setpoint);
+    Serial.print(",fast_voltage:"); Serial.print(fast_voltage);
+    Serial.print(",Output:"); Serial.println(Output);
+    lastPlotPrint = millis();
+}
 }
